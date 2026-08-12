@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Developer diagnostics harness. Not shipped: it exists so each stage of the capture pipeline
+    can be exercised from the command line without launching the elevated tray app.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ReplayCapture.Probe</RootNamespace>
+    <AssemblyName>rcprobe</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ReplayCapture.Core\ReplayCapture.Core.csproj" />
+  </ItemGroup>
+
+</Project>

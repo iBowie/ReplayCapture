@@ -1,0 +1,61 @@
+// --- Timing (QPC + high-resolution waitable timer for the CFR pacer) ---
+QueryPerformanceCounter
+QueryPerformanceFrequency
+CreateWaitableTimerExW
+SetWaitableTimerEx
+CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+SYNCHRONIZATION_ACCESS_RIGHTS
+WaitForSingleObject
+CloseHandle
+CreateEventW
+SetEvent
+
+// --- Display enumeration ---
+EnumDisplayMonitors
+GetMonitorInfoW
+MONITORINFOEXW
+EnumDisplaySettingsW
+MonitorFromWindow
+
+// --- Audio: WASAPI core ---
+IMMDeviceEnumerator
+MMDeviceEnumerator
+IMMDevice
+IMMDeviceCollection
+IMMNotificationClient
+IAudioClient
+IAudioCaptureClient
+IAudioClock
+EDataFlow
+ERole
+DEVICE_STATE
+WAVEFORMATEX
+WAVEFORMATEXTENSIBLE
+AUDCLNT_SHAREMODE
+AUDCLNT_STREAMFLAGS_LOOPBACK
+AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY
+_AUDCLNT_BUFFERFLAGS
+IPropertyStore
+STGM
+PropVariantClear
+CoTaskMemFree
+
+// --- Audio: session enumeration ---
+// Used to discover which processes are *actually* producing audio. Without this, a "everything
+// except X" track would have to attach a loopback client to every running process.
+IAudioSessionManager2
+IAudioSessionEnumerator
+IAudioSessionControl2
+AudioSessionState
+
+// --- Audio: per-process loopback (Windows 10 20348+) ---
+ActivateAudioInterfaceAsync
+IActivateAudioInterfaceCompletionHandler
+IActivateAudioInterfaceAsyncOperation
+AUDIOCLIENT_ACTIVATION_PARAMS
+AUDIOCLIENT_ACTIVATION_TYPE
+AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS
+PROCESS_LOOPBACK_MODE
+VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK

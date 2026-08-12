@@ -1,0 +1,9 @@
+/publish
+/src/ReplayCapture.App/bin
+/src/ReplayCapture.App/obj
+/src/ReplayCapture.Core/bin
+/src/ReplayCapture.Core/obj
+/tests/ReplayCapture.Tests/bin
+/tests/ReplayCapture.Tests/obj
+/tools/ReplayCapture.Probe/bin
+/tools/ReplayCapture.Probe/obj

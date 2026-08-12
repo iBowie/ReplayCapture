@@ -1,0 +1,27 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.20348.0</SupportedOSPlatformVersion>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- NVENC, D3D11 and the FFmpeg native runtime are x64-only. -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <!--
+      Globalization must stay ON. With InvariantGlobalization=true, WPF's binding engine throws
+      "Cannot find non-neutral culture related to 'en-us'" from XmlLanguage.GetSpecificCulture()
+      the moment any templated control with a MultiBinding is realised — which took down the tray
+      context menu on first right-click.
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

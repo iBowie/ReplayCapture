@@ -1,0 +1,8 @@
+RegisterHotKey
+UnregisterHotKey
+SetWindowDisplayAffinity
+WINDOW_DISPLAY_AFFINITY
+GetWindowLongPtr
+SetWindowLongPtr
+WINDOW_EX_STYLE
+WINDOW_LONG_PTR_INDEX

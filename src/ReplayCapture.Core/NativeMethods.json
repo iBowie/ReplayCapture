@@ -1,0 +1,8 @@
+{
+  "$schema": "https://aka.ms/CsWin32.schema.json",
+  // Internal: each project generates its own Windows.Win32.PInvoke, and a public one here would
+  // collide with the App project's copy (CS0436).
+  "public": false,
+  "allowMarshaling": true,
+  "useSafeHandles": true
+}
