@@ -27,6 +27,9 @@ public sealed record AppConfig
     /// </summary>
     public int MaxRingMemoryMegabytes { get; init; } = 2048;
 
+    /// <summary>Which native API captures each display's frames. See <see cref="CaptureBackend"/>.</summary>
+    public CaptureBackend CaptureBackend { get; init; } = CaptureBackend.Dxgi;
+
     public IReadOnlyList<DisplayConfig> Displays { get; init; } = [];
 
     public IReadOnlyList<AudioTrackConfig> AudioTracks { get; init; } = DefaultAudioTracks;
@@ -91,6 +94,39 @@ public enum OverlayCorner
     TopRight,
     BottomLeft,
     BottomRight,
+}
+
+/// <summary>
+/// Which native API <see cref="Capture.DisplayCaptureSourceFactory"/> uses to pull frames off each
+/// display. Applies to every display; a resolution/refresh mismatch between two monitors doesn't
+/// change which backend suits either of them, so there is one setting rather than one per display.
+/// <para>
+/// <b><see cref="Dxgi"/></b> (the default) — raw <c>IDXGIOutputDuplication</c> ("Desktop
+/// Duplication"). On this hardware it delivers a 200Hz display's real refresh rate (~207
+/// frames/sec measured); WGC on the same monitor capped out around ~50/sec regardless of
+/// frame-pool buffer count or GPU load, a limit that lives inside WGC's own compositor layer, not
+/// anything this app controls. Desktop Duplication hands back the cursor as separate shape/position
+/// metadata rather than compositing it in, so <c>DxgiDisplayCaptureSource</c> draws it back on with
+/// a GPU alpha-blend (<c>CursorOverlay</c>) — the trade-off is one rare edge case: the legacy
+/// monochrome/masked-color "invert" cursor pixel renders transparent instead of inverted, since a
+/// pure blend never reads the destination. It also runs a dedicated polling thread per display that
+/// never fully idles, even when nothing on screen is changing.
+/// </para>
+/// <para>
+/// <b><see cref="Wgc"/></b> — Windows.Graphics.Capture. Event-driven: a frame-arrived callback that
+/// costs nothing while the screen is static, versus Desktop Duplication's always-spinning polling
+/// thread — the one real reason to prefer it. It composites the cursor (including that legacy
+/// invert pixel) correctly with no extra work. The cost is the frame-rate cap above, so it is the
+/// wrong choice for capturing a high-refresh-rate display (120Hz+) at its native rate; it is a
+/// reasonable choice on a 60Hz-or-lower display, mostly-idle content (a second monitor showing a
+/// dashboard, chat, or a stream overlay), or a machine where the always-on polling thread's CPU cost
+/// actually matters more than frame-rate accuracy.
+/// </para>
+/// </summary>
+public enum CaptureBackend
+{
+    Dxgi,
+    Wgc,
 }
 
 public sealed record DisplayConfig

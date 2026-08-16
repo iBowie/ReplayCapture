@@ -16,13 +16,16 @@ switch (command)
         break;
 
     case "capture":
-        CaptureSmokeTest(args.Length > 1 ? double.Parse(args[1]) : 3.0);
+        CaptureSmokeTest(
+            args.Length > 1 ? double.Parse(args[1]) : 3.0,
+            args.Length > 2 ? ParseBackend(args[2]) : ReplayCapture.Core.Config.CaptureBackend.Dxgi);
         break;
 
     case "record":
         Record(
             args.Length > 1 ? int.Parse(args[1]) : 10,
-            args.Length > 2 ? args[2] : @"S:\_replayCapture\out");
+            args.Length > 2 ? args[2] : @"S:\_replayCapture\out",
+            args.Length > 3 ? ParseBackend(args[3]) : ReplayCapture.Core.Config.CaptureBackend.Dxgi);
         break;
 
     case "audio":
@@ -52,8 +55,9 @@ switch (command)
               displays          Enumerate attached displays as the capture pipeline sees them
               audio             Enumerate active audio endpoints
               sessions          Show processes holding audio sessions and the track each maps to
-              capture [secs]    Capture the primary display and convert frames to NV12
-              record [secs] [outDir]
+              capture [secs] [dxgi|wgc]
+                                Capture the primary display and convert frames to NV12
+              record [secs] [outDir] [dxgi|wgc]
                                 Run the full pipeline and write one .mov per display
               bench [secs]      Measure the always-on overhead against an idle baseline
               benchreal [secs]  Same, but against the actual saved config.json and every display
@@ -61,6 +65,13 @@ switch (command)
             """);
         break;
 }
+
+static ReplayCapture.Core.Config.CaptureBackend ParseBackend(string arg) => arg.ToLowerInvariant() switch
+{
+    "wgc" => ReplayCapture.Core.Config.CaptureBackend.Wgc,
+    "dxgi" => ReplayCapture.Core.Config.CaptureBackend.Dxgi,
+    _ => throw new ArgumentException($"Unknown capture backend '{arg}'; expected 'dxgi' or 'wgc'."),
+};
 
 // Scaffolding aid: prints the shape of Vortice's video-processor surface so the converter can be
 // written against the real API instead of guesses.
@@ -98,12 +109,13 @@ static void DumpApi(string filter)
 
 // The whole pipeline in one command: capture -> pace -> NVENC -> ring, plus every audio track,
 // written out as one .mov per display.
-static void Record(int seconds, string outputDirectory)
+static void Record(int seconds, string outputDirectory, ReplayCapture.Core.Config.CaptureBackend backend)
 {
     var config = new ReplayCapture.Core.Config.AppConfig
     {
         BufferSeconds = seconds,
         OutputDirectory = outputDirectory,
+        CaptureBackend = backend,
     };
 
     using var session = new ReplayCapture.Core.ReplaySession(config);
@@ -154,15 +166,15 @@ static void Record(int seconds, string outputDirectory)
 
 // End-to-end check of the GPU path up to (but not including) the encoder: WGC delivers frames,
 // the latch survives pool recycling, and the video processor produces NV12.
-static void CaptureSmokeTest(double seconds)
+static void CaptureSmokeTest(double seconds, ReplayCapture.Core.Config.CaptureBackend backend)
 {
     var display = DisplayEnumerator.Enumerate().FirstOrDefault(d => d.IsPrimary)
                   ?? DisplayEnumerator.Enumerate().First();
 
-    Console.WriteLine($"\nCapturing {display.DeviceName} for {seconds:0.#}s…\n");
+    Console.WriteLine($"\nCapturing {display.DeviceName} for {seconds:0.#}s via {backend}…\n");
 
     using var d3d = new D3DContext();
-    using var capture = new DisplayCaptureSource(d3d, display);
+    using var capture = DisplayCaptureSourceFactory.Create(backend, d3d, display);
 
     var size = capture.ContentSize;
     using var converter = new Nv12Converter(d3d, size.Width, size.Height, display.RefreshHz);

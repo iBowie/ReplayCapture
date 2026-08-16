@@ -328,6 +328,7 @@ public partial class App : Application
         var pipelineChanged =
             previous.BufferSeconds != updated.BufferSeconds
             || previous.MaxRingMemoryMegabytes != updated.MaxRingMemoryMegabytes
+            || previous.CaptureBackend != updated.CaptureBackend
             || !previous.Displays.SequenceEqual(updated.Displays)
             || !previous.AudioTracks.SequenceEqual(updated.AudioTracks);
 

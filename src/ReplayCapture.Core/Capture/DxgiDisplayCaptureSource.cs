@@ -10,13 +10,17 @@ namespace ReplayCapture.Core.Capture;
 /// <summary>
 /// Captures one display through raw <see cref="IDXGIOutputDuplication"/> and keeps the most recent
 /// frame (cursor already composited in) latched in a texture the encoder can read at its own
-/// cadence.
+/// cadence. The default backend — see <see cref="Config.CaptureBackend"/> for when to pick
+/// <see cref="WgcDisplayCaptureSource"/> instead.
 /// <para>
-/// This used to be built on Windows.Graphics.Capture. WGC was measured capping delivery at ~50
-/// frames/sec on a 200Hz display — regardless of frame-pool buffer count or GPU load — while raw
+/// Desktop Duplication was adopted after Windows.Graphics.Capture was measured capping delivery at
+/// ~50 frames/sec on a 200Hz display — regardless of frame-pool buffer count or GPU load — while raw
 /// Desktop Duplication on the same device, same monitor, hits ~207/s. The cap lives inside WGC's own
 /// frame-pool/compositor layer, not in anything this pipeline controls, so Desktop Duplication is
-/// what actually delivers the display's real refresh rate.
+/// what actually delivers the display's real refresh rate. The trade-off is this class's polling
+/// thread, one per display, spinning continuously even when nothing on screen is changing — WGC's
+/// frame-arrived event costs nothing at idle. See <see cref="Config.CaptureBackend"/> for the full
+/// comparison.
 /// </para>
 /// <para>
 /// Content only <i>changes</i> at an irregular rate, so frames still arrive irregularly. This class
@@ -46,7 +50,7 @@ namespace ReplayCapture.Core.Capture;
 /// write into one can never overlap a read of the other.
 /// </para>
 /// </summary>
-public sealed class DisplayCaptureSource : IDisposable
+public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource
 {
     private const int LatchBufferCount = 2;
 
@@ -88,7 +92,7 @@ public sealed class DisplayCaptureSource : IDisposable
     /// <summary>Total frames Desktop Duplication has delivered. Compare with encoded frames to see duplicate ratio.</summary>
     public long FramesArrived => Interlocked.Read(ref _framesArrived);
 
-    public DisplayCaptureSource(D3DContext d3d, DisplayInfo display)
+    public DxgiDisplayCaptureSource(D3DContext d3d, DisplayInfo display)
     {
         _d3d = d3d;
         Display = display;

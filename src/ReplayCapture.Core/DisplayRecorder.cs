@@ -20,7 +20,7 @@ namespace ReplayCapture.Core;
 public sealed class DisplayRecorder : IDisposable
 {
     private readonly D3DContext _d3d;
-    private readonly DisplayCaptureSource _capture;
+    private readonly IDisplayCaptureSource _capture;
     private readonly PacketRingBuffer _ring;
     private readonly FramePacer _pacer;
     private readonly DisplayConfig _config;
@@ -60,14 +60,16 @@ public sealed class DisplayRecorder : IDisposable
     /// <summary>How many times the encoder had to be rebuilt after a resolution change.</summary>
     public long Rebuilds => Interlocked.Read(ref _rebuilds);
 
-    public DisplayRecorder(D3DContext d3d, DisplayInfo display, DisplayConfig config, int bufferSeconds, long memoryLimitBytes)
+    public DisplayRecorder(
+        D3DContext d3d, DisplayInfo display, DisplayConfig config, int bufferSeconds, long memoryLimitBytes,
+        CaptureBackend captureBackend = CaptureBackend.Dxgi)
     {
         _d3d = d3d;
         _config = config;
         Display = display;
         FramesPerSecond = config.Fps ?? display.RefreshHz;
 
-        _capture = new DisplayCaptureSource(d3d, display);
+        _capture = DisplayCaptureSourceFactory.Create(captureBackend, d3d, display);
         _capture.ContentSizeChanged += OnContentSizeChanged;
 
         var size = _capture.ContentSize;

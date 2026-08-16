@@ -1,0 +1,45 @@
+using Vortice.Direct3D11;
+using Windows.Graphics;
+
+namespace ReplayCapture.Core.Capture;
+
+/// <summary>
+/// One display's frame source: whatever backend is producing frames, <see cref="DisplayRecorder"/>
+/// only ever needs the newest one latched in a texture it can read at its own cadence.
+/// <para>
+/// Two implementations exist — <see cref="DxgiDisplayCaptureSource"/> (raw
+/// <c>IDXGIOutputDuplication</c>) and <see cref="WgcDisplayCaptureSource"/>
+/// (Windows.Graphics.Capture) — selected per <see cref="Config.AppConfig.CaptureBackend"/>. See
+/// that property's doc comment and the README's capture-backend section for why one is the default
+/// and when the other is worth picking instead.
+/// </para>
+/// </summary>
+public interface IDisplayCaptureSource : IDisposable
+{
+    DisplayInfo Display { get; }
+
+    /// <summary>
+    /// True once the backend could not recover capture on its own — e.g. the display was unplugged,
+    /// powered off, or (WGC only) the system tore down the capture item across sleep/resume. The
+    /// pipeline cannot restart capture on a dead source, so this is surfaced for the owner to rebuild.
+    /// </summary>
+    bool IsClosed { get; }
+
+    /// <summary>Current content size. Changes when the user alters resolution or rotates a display.</summary>
+    SizeInt32 ContentSize { get; }
+
+    /// <summary>Raised when the display's size changed and the pipeline needs rebuilding.</summary>
+    event Action<SizeInt32>? ContentSizeChanged;
+
+    /// <summary>Total frames the backend has delivered. Compare with encoded frames to see duplicate ratio.</summary>
+    long FramesArrived { get; }
+
+    /// <summary>
+    /// Hands the caller the latest captured frame. Returns false until the very first frame lands —
+    /// on a completely static display that can take a moment, because nothing has changed to send.
+    /// </summary>
+    bool TryGetLatest(out ID3D11Texture2D texture, out long qpcTicks);
+
+    /// <summary>Forces capture to be torn down and re-acquired at the given size.</summary>
+    void Recreate(SizeInt32 size);
+}

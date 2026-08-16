@@ -33,8 +33,8 @@ ReplayCapture.exe --selftest
 ```
 
 `tools/ReplayCapture.Probe` (built as `rcprobe.exe`) is the developer harness for exercising pipeline
-stages without launching the elevated tray app: `rcprobe displays`, `rcprobe capture <n>`,
-`rcprobe record <seconds> <outDir>`, `rcprobe audio`, `rcprobe sessions` (shows which track each
+stages without launching the elevated tray app: `rcprobe displays`, `rcprobe capture <n> [dxgi|wgc]`,
+`rcprobe record <seconds> <outDir> [dxgi|wgc]`, `rcprobe audio`, `rcprobe sessions` (shows which track each
 live audio session would be assigned to — the fast way to check a config change), `rcprobe bench
 <seconds>` (synthetic config), `rcprobe benchreal <seconds>` (the actual saved `config.json`, every
 display — per-display frame accuracy/late-tick/drift diagnostics), `rcprobe rebuild` (exercises the
@@ -58,7 +58,9 @@ internal but is exactly the logic worth testing).
   everything attached"), the 3-second watchdog that detects a lost GPU or a changed display set and
   raises `RecoveryRequired`, and `Save()`, which snapshots every recorder's ring buffer and the audio
   engine and muxes them into aligned `.mov` files sharing one origin timestamp.
-- `DisplayRecorder` is one display's full pipeline: `DisplayCaptureSource` (DXGI Desktop Duplication)
+- `DisplayRecorder` is one display's full pipeline: an `IDisplayCaptureSource` (built by
+  `DisplayCaptureSourceFactory` per `AppConfig.CaptureBackend` — DXGI Desktop Duplication by default,
+  or Windows.Graphics.Capture; see the README's capture-backend section for the trade-off)
   → `FramePacer` (paces ticks to the configured fps, inventing duplicate frames rather than stalling)
   → `NvencVideoEncoder` → `PacketRingBuffer`. A resolution change sets `_rebuildRequested`; the pacer
   rebuilds capture + encoder on its next tick and **discards** the ring buffer, because H.264

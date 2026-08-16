@@ -107,6 +107,23 @@ public class AppConfigTests
     }
 
     [Fact]
+    public void Capture_backend_defaults_to_dxgi()
+    {
+        Assert.Equal(CaptureBackend.Dxgi, new AppConfig().CaptureBackend);
+    }
+
+    [Fact]
+    public void Capture_backend_round_trips_through_json()
+    {
+        var config = new AppConfig { CaptureBackend = CaptureBackend.Wgc };
+
+        var restored = JsonSerializer.Deserialize<AppConfig>(
+            JsonSerializer.Serialize(config, Options), Options)!;
+
+        Assert.Equal(CaptureBackend.Wgc, restored.CaptureBackend);
+    }
+
+    [Fact]
     public void Process_groups_round_trip_through_json()
     {
         var config = new AppConfig

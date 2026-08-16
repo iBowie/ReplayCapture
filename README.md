@@ -9,7 +9,7 @@ and an arbitrary number of separate audio stems.
 | | |
 |---|---|
 | Stack | C# on `net10.0-windows10.0.26100.0`, x64 only |
-| Capture | Raw DXGI Desktop Duplication (`IDXGIOutputDuplication`), one session per display |
+| Capture | Selectable per `AppConfig.CaptureBackend` — DXGI Desktop Duplication (default) or Windows.Graphics.Capture, one session per display either way |
 | Colour convert | `ID3D11VideoProcessor` (fixed-function BGRA→NV12, BT.709 limited range) |
 | Encode | NVENC `h264_nvenc` via Sdcb.FFmpeg, sharing the capture `ID3D11Device` |
 | Container | **`.mov`**, one file per display, each carrying every audio track |
@@ -30,7 +30,7 @@ To avoid a UAC prompt on every boot, `StartupTaskInstaller` registers a Task Sch
 (logon trigger, `RunLevel=HighestAvailable`, 20 s delay) rather than a Run-key or Startup-folder
 shortcut, neither of which can launch elevated silently.
 
-Elevation is also what lets DXGI Desktop Duplication see elevated windows' content.
+Elevation is also what lets capture — either backend — see elevated windows' content.
 
 ## Build and test
 
@@ -131,8 +131,33 @@ rcprobe sessions
 `sessions` shows every process currently holding an audio session and which track the rules assign
 it to — the fastest way to check a config change did what you meant, without starting a capture.
 
-`rcprobe capture 3` exercises Desktop Duplication and the NV12 converter without touching the
-encoder, which is where to start if frames stop arriving.
+`rcprobe capture 3 [dxgi|wgc]` exercises one capture backend and the NV12 converter without touching
+the encoder, which is where to start if frames stop arriving. `rcprobe record` and `rcprobe capture`
+both default to `dxgi`; pass `wgc` to exercise the other backend.
+
+### Capture backend: DXGI Desktop Duplication vs Windows.Graphics.Capture
+
+`AppConfig.CaptureBackend` picks which native API each display's `DisplayRecorder` uses to pull
+frames — implemented as `DxgiDisplayCaptureSource` and `WgcDisplayCaptureSource`, both behind
+`IDisplayCaptureSource` and selected by `DisplayCaptureSourceFactory`. It is one setting for every
+display, not per-display, since the trade-off is about the pipeline's threading model and a
+display's own refresh rate, not something that differs display-to-display in a way that would need
+mixing backends.
+
+| | DXGI Desktop Duplication (default) | Windows.Graphics.Capture |
+|---|---|---|
+| Delivery | Dedicated polling thread per display, `AcquireNextFrame(0)` in a tight loop | Event-driven `FrameArrived` callback |
+| Idle cost | Never fully idles — the polling thread keeps spinning even on a static screen | Costs ~nothing while the screen isn't changing |
+| Frame-rate ceiling | None observed — matched a 200 Hz panel's native refresh (~207 fps measured) | Capped at **~50 fps on the same 200 Hz panel**, regardless of frame-pool buffer count or GPU load — the ceiling lives inside WGC's own compositor layer |
+| Cursor | Composited manually via a GPU alpha-blend (`CursorOverlay`); the legacy monochrome/masked-color "invert" pixel renders transparent instead of inverted | Composited by Windows itself, including the invert pixel |
+
+Pick **DXGI** (the default) for any display you want captured at its real native refresh rate,
+which in practice means every high-refresh gaming display — the whole reason this app switched to
+it. Pick **WGC** for a display where the always-on polling thread's CPU cost matters more than
+frame-accuracy — a 60 Hz-or-lower secondary monitor showing mostly-static content (chat, a
+dashboard, a stream overlay) is the case where the trade actually pays off, since capped delivery
+never becomes visible on content that rarely changes and isn't refreshing above 50 fps anyway.
+Changing it restarts the capture pipeline, like changing the display list or buffer length.
 
 ### Verified on this machine
 
@@ -226,10 +251,13 @@ delivering only **~50 frames/sec** — identical at idle and under full game loa
 raising `numberOfBuffers` from 2 to 8. That ruled out both GPU contention and frame-pool starvation
 as the cause: the ceiling lives inside WGC's own frame-pool/compositor layer. Raw
 `IDXGIOutputDuplication` on the *same* device, *same* monitor, delivered **~207 frames/sec** — right
-at native refresh — which is why `DisplayCaptureSource` is built on Desktop Duplication rather than
-WGC. The cost is that Desktop Duplication hands back the cursor as separate shape/position metadata
-instead of compositing it into the frame, so `DisplayCaptureSource` draws it back in with
-`CursorOverlay`, a GPU alpha-blend quad (see the next entry for why it isn't a CPU blend).
+at native refresh — which is why Desktop Duplication (`DxgiDisplayCaptureSource`) is the default
+backend rather than WGC (`WgcDisplayCaptureSource`); both now ship side by side behind
+`AppConfig.CaptureBackend` (see the capture-backend section above) since WGC's lighter idle cost is
+worth having on a display where the frame-rate cap doesn't bite. The cost of Desktop Duplication is
+that it hands back the cursor as separate shape/position metadata instead of compositing it into the
+frame, so `DxgiDisplayCaptureSource` draws it back in with `CursorOverlay`, a GPU alpha-blend quad
+(see the next entry for why it isn't a CPU blend).
 
 **A blocking `IDXGIOutputDuplication::AcquireNextFrame` starves every other thread sharing the
 device, even at a few milliseconds.** Fixing the WGC cap above created a second, worse problem: two

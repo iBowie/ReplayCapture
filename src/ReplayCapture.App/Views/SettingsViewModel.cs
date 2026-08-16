@@ -101,6 +101,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _showOverlayIndicator;
     [ObservableProperty] private OverlayCorner _overlayCorner;
     [ObservableProperty] private int _maxRingMemoryMegabytes;
+    [ObservableProperty] private CaptureBackend _captureBackend;
     [ObservableProperty] private string? _validationError;
 
     public ObservableCollection<DisplayRowViewModel> Displays { get; } = [];
@@ -109,6 +110,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public ObservableCollection<AudioSessionInfo> RunningAudioProcesses { get; } = [];
 
     public IReadOnlyList<OverlayCorner> OverlayCorners { get; } = Enum.GetValues<OverlayCorner>();
+    public IReadOnlyList<CaptureBackend> CaptureBackends { get; } = Enum.GetValues<CaptureBackend>();
 
     [ObservableProperty] private TrackRowViewModel? _selectedTrack;
     [ObservableProperty] private GroupRowViewModel? _selectedGroup;
@@ -141,6 +143,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _showOverlayIndicator = config.ShowOverlayIndicator;
         _overlayCorner = config.OverlayCorner;
         _maxRingMemoryMegabytes = config.MaxRingMemoryMegabytes;
+        _captureBackend = config.CaptureBackend;
 
         LoadDisplays(config);
         foreach (var track in config.AudioTracks) Tracks.Add(TrackRowViewModel.From(track));
@@ -329,6 +332,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             ShowOverlayIndicator = ShowOverlayIndicator,
             OverlayCorner = OverlayCorner,
             MaxRingMemoryMegabytes = Math.Clamp(MaxRingMemoryMegabytes, 256, 32768),
+            CaptureBackend = CaptureBackend,
             Displays = [.. Displays.Select(d => d.ToConfig())],
             AudioTracks = [.. Tracks.Select(t => t.ToConfig())],
             ProcessGroups = Groups.ToDictionary(
