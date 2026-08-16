@@ -1,7 +1,6 @@
+using System.Runtime.InteropServices.Marshalling;
 using ReplayCapture.Core.Diagnostics;
-using Windows.Win32.Foundation;
 using Windows.Win32.Media.Audio;
-using Windows.Win32.UI.Shell.PropertiesSystem;
 
 namespace ReplayCapture.Core.Audio;
 
@@ -16,9 +15,10 @@ namespace ReplayCapture.Core.Audio;
 /// is what lets <see cref="AudioEngine"/> notice the change and reopen against the new default.
 /// </para>
 /// </summary>
-internal sealed class DefaultDeviceWatcher : IMMNotificationClient, IDisposable
+[GeneratedComClass]
+internal sealed partial class DefaultDeviceWatcher : Interop.IMMNotificationClient, Interop.IAgileObject, IDisposable
 {
-    private readonly IMMDeviceEnumerator _enumerator;
+    private readonly Interop.IMMDeviceEnumerator _enumerator;
     private bool _disposed;
 
     /// <summary>
@@ -36,14 +36,14 @@ internal sealed class DefaultDeviceWatcher : IMMNotificationClient, IDisposable
         _enumerator.RegisterEndpointNotificationCallback(this);
     }
 
-    public void OnDefaultDeviceChanged(EDataFlow flow, ERole role, PCWSTR pwstrDefaultDeviceId)
+    public void OnDefaultDeviceChanged(Interop.EDataFlow flow, Interop.ERole role, nint pwstrDefaultDeviceId)
     {
-        var relevantRole = flow == EDataFlow.eRender ? ERole.eConsole : ERole.eCommunications;
+        var relevantRole = flow == Interop.EDataFlow.eRender ? Interop.ERole.eConsole : Interop.ERole.eCommunications;
         if (role != relevantRole) return;
 
         try
         {
-            DefaultDeviceChanged?.Invoke(flow);
+            DefaultDeviceChanged?.Invoke((EDataFlow)flow);
         }
         catch (Exception ex)
         {
@@ -51,13 +51,13 @@ internal sealed class DefaultDeviceWatcher : IMMNotificationClient, IDisposable
         }
     }
 
-    public void OnDeviceStateChanged(PCWSTR pwstrDeviceId, DEVICE_STATE dwNewState) { }
+    public void OnDeviceStateChanged(nint pwstrDeviceId, Interop.DeviceState dwNewState) { }
 
-    public void OnDeviceAdded(PCWSTR pwstrDeviceId) { }
+    public void OnDeviceAdded(nint pwstrDeviceId) { }
 
-    public void OnDeviceRemoved(PCWSTR pwstrDeviceId) { }
+    public void OnDeviceRemoved(nint pwstrDeviceId) { }
 
-    public void OnPropertyValueChanged(PCWSTR pwstrDeviceId, PROPERTYKEY key) { }
+    public void OnPropertyValueChanged(nint pwstrDeviceId, Interop.PropertyKey key) { }
 
     public void Dispose()
     {

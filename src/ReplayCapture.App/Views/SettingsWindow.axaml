@@ -1,0 +1,235 @@
+<Window x:Class="ReplayCapture.App.Views.SettingsWindow"
+        xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ReplayCapture.App.Views"
+        x:DataType="vm:SettingsViewModel"
+        Title="ReplayCapture settings"
+        Width="780" Height="620"
+        MinWidth="680" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI" FontSize="13"
+        Background="#FF1B1D21" Foreground="#FFE8EAED">
+
+    <!-- Colors and control shapes come from the app's Fluent Dark theme (see App.axaml); only the
+         app-specific hint text style and button sizing are worth overriding here. -->
+    <Window.Styles>
+        <Style Selector="TextBlock.hint">
+            <Setter Property="Foreground" Value="#FF9AA0A6" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="Button">
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="MinWidth" Value="90" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="16" RowDefinitions="*,Auto,Auto">
+
+        <TabControl Grid.Row="0">
+
+            <!-- ============================ General ============================ -->
+            <TabItem Header="General">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid Margin="14" ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Buffer length (seconds)" />
+                        <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                            <TextBox Width="80" Text="{Binding BufferSeconds}" />
+                            <TextBlock Margin="12,0,0,0" Classes="hint" Text="{Binding EstimatedMemory}" />
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Hotkey" />
+                        <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                            <TextBox x:Name="HotkeyBox" Width="200" IsReadOnly="True"
+                                     Text="{Binding Hotkey, Mode=TwoWay}"
+                                     KeyDown="OnHotkeyKeyDown"
+                                     ToolTip.Tip="Click here and press the key combination" />
+                            <TextBlock Margin="12,0,0,0" Classes="hint" Text="Click, then press a combination" />
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Save clips to" />
+                        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                            <TextBox Width="400" Text="{Binding OutputDirectory}" />
+                            <Button Content="Browse…" Margin="8,0,0,0" MinWidth="80" Click="OnBrowse" />
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Memory cap (MB)" />
+                        <TextBox Grid.Row="3" Grid.Column="1" Width="80" HorizontalAlignment="Left" Margin="0,4"
+                                 Text="{Binding MaxRingMemoryMegabytes}" />
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Indicator corner" />
+                        <ComboBox Grid.Row="4" Grid.Column="1" Width="160" HorizontalAlignment="Left" Margin="0,4"
+                                  ItemsSource="{Binding OverlayCorners}"
+                                  SelectedItem="{Binding OverlayCorner}" />
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Capture backend" />
+                        <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                            <ComboBox Width="120" ItemsSource="{Binding CaptureBackends}"
+                                      SelectedItem="{Binding CaptureBackend}" />
+                        </StackPanel>
+                        <TextBlock Grid.Row="6" Grid.Column="1" Margin="0,0,0,8" Classes="hint"
+                                   Text="Dxgi (Desktop Duplication) delivers a high-refresh display's full native rate but runs a polling thread per display that never fully idles. Wgc (Windows.Graphics.Capture) is event-driven and costs nothing while the screen is static, but was measured capping delivery around 50 fps on a 200Hz panel regardless of load — fine for 60Hz-or-lower or mostly-idle displays, wrong for a high-refresh one." />
+
+                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Encoder" />
+                        <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                            <ComboBox Width="120" ItemsSource="{Binding VideoEncoderBackends}"
+                                      SelectedItem="{Binding VideoEncoderBackend}" />
+                        </StackPanel>
+                        <TextBlock Grid.Row="8" Grid.Column="1" Margin="0,0,0,8" Classes="hint"
+                                   Text="Nvenc and Amf both encode entirely on the GPU and need the matching vendor's hardware encoder (NVIDIA NVENC / AMD VCE). X264 encodes on the CPU instead — it works on any machine, but costs a GPU-to-CPU frame copy plus the CPU time to encode, so expect higher CPU usage and a lower sustainable frame rate than either hardware option." />
+
+                        <CheckBox Grid.Row="9" Grid.Column="1" Content="Start with Windows (elevated, via Task Scheduler)"
+                                  IsChecked="{Binding StartWithWindows}" />
+                        <CheckBox Grid.Row="10" Grid.Column="1" Content="Show the armed indicator on screen"
+                                  IsChecked="{Binding ShowOverlayIndicator}" />
+                        <CheckBox Grid.Row="11" Grid.Column="1" Content="Play a sound when a clip is saved"
+                                  IsChecked="{Binding PlaySoundOnSave}" />
+
+                        <TextBlock Grid.Row="12" Grid.Column="1" Margin="0,14,0,0" Classes="hint"
+                                   Text="The indicator is excluded from capture, so it never appears in saved clips. It cannot draw over a true fullscreen-exclusive game — the tray icon and save sound cover that case." />
+
+                        <TextBlock Grid.Row="13" Grid.Column="1" Margin="0,10,0,0" Classes="hint"
+                                   Text="Changing the buffer length, displays, audio tracks, capture backend or encoder restarts the capture pipeline. The buffer is empty for a few seconds afterwards." />
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ============================ Displays ============================ -->
+            <TabItem Header="Displays">
+                <Grid Margin="14" RowDefinitions="Auto,Auto,*">
+
+                    <TextBlock Grid.Row="0" Margin="0,0,0,10" Classes="hint"
+                               Text="Each enabled display is captured as its own video stream at its native resolution and written to its own .mov file. Leave FPS as 'auto' to follow the display's refresh rate." />
+
+                    <Grid Grid.Row="1" ColumnDefinitions="44,*,80,80" Margin="0,0,0,4">
+                        <TextBlock Grid.Column="0" Text="On" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="Display" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="2" Text="FPS" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="3" Text="Mbps" FontWeight="SemiBold" />
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="2">
+                        <ItemsControl ItemsSource="{Binding Displays}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:DisplayRowViewModel">
+                                    <Grid ColumnDefinitions="44,*,80,80" Margin="0,6">
+                                        <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Description}" VerticalAlignment="Center" />
+                                        <TextBox Grid.Column="2" Text="{Binding Fps}" Margin="0,0,8,0" />
+                                        <TextBox Grid.Column="3" Text="{Binding BitrateMbps}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+
+            <!-- ============================ Audio ============================ -->
+            <TabItem Header="Audio tracks">
+                <Grid Margin="14" ColumnDefinitions="230,*" RowDefinitions="Auto,*,Auto">
+
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,10" Classes="hint"
+                               Text="Every track becomes a separate audio stream in each saved file. There is no limit on the number of tracks." />
+
+                    <ListBox Grid.Row="1" Grid.Column="0" Margin="0,0,12,0"
+                             ItemsSource="{Binding Tracks}" SelectedItem="{Binding SelectedTrack}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:TrackRowViewModel">
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Add" MinWidth="70" Command="{Binding AddTrackCommand}" />
+                        <Button Content="Remove" MinWidth="70" Command="{Binding RemoveTrackCommand}" />
+                    </StackPanel>
+
+                    <Grid Grid.Row="1" Grid.Column="1" DataContext="{Binding SelectedTrack}"
+                          x:DataType="vm:TrackRowViewModel"
+                          RowDefinitions="Auto,Auto,*">
+                        <StackPanel Grid.Row="0" Orientation="Horizontal">
+                            <TextBlock Text="Name" Width="52" VerticalAlignment="Center" />
+                            <TextBox Width="220" Text="{Binding Name}" />
+                            <TextBlock Text="Gain" Width="46" Margin="16,0,0,0" VerticalAlignment="Center" />
+                            <TextBox Width="60" Text="{Binding Gain}" />
+                            <CheckBox Content="Enabled" Margin="16,0,0,0" IsChecked="{Binding Enabled}" />
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="1" Margin="0,12,0,4" Classes="hint"
+                                   Text="Sources, one per line:   device:render:default   ·   device:capture:default   ·   proc:spotify.exe   ·   proc:!discord.exe   ·   proc:*   ·   group:comms   ·   group:!comms" />
+
+                        <TextBox Grid.Row="2" AcceptsReturn="True" FontFamily="Cascadia Mono, Consolas"
+                                 VerticalContentAlignment="Top"
+                                 Text="{Binding SourcesText}" />
+                    </Grid>
+
+                    <Grid Grid.Row="2" Grid.Column="1" Margin="0,8,0,0" ColumnDefinitions="*,Auto">
+                        <ComboBox Grid.Column="0" ItemsSource="{Binding RunningAudioProcesses}"
+                                  SelectedItem="{Binding SelectedProcess}"
+                                  ToolTip.Tip="Processes currently playing audio" />
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+                            <Button Content="↻" MinWidth="34" Command="{Binding RefreshProcessesCommand}"
+                                    ToolTip.Tip="Refresh the list" />
+                            <Button Content="Add to track" MinWidth="100" Command="{Binding AddProcessToTrackCommand}" />
+                            <Button Content="Exclude elsewhere" MinWidth="130"
+                                    Command="{Binding ExcludeProcessFromCatchAllCommand}"
+                                    ToolTip.Tip="Add an exclusion on every track using proc:*, so this app is not captured twice" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <!-- ============================ Process groups ============================ -->
+            <TabItem Header="Process groups">
+                <Grid Margin="14" ColumnDefinitions="230,*" RowDefinitions="Auto,*,Auto">
+
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,10" Classes="hint"
+                               Text="Named sets of executables, so a track's Sources can say group:comms (or group:!comms to exclude) instead of listing every app with proc:." />
+
+                    <ListBox Grid.Row="1" Grid.Column="0" Margin="0,0,12,0"
+                             ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:GroupRowViewModel">
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Add" MinWidth="70" Command="{Binding AddGroupCommand}" />
+                        <Button Content="Remove" MinWidth="70" Command="{Binding RemoveGroupCommand}" />
+                    </StackPanel>
+
+                    <Grid Grid.Row="1" Grid.Column="1" DataContext="{Binding SelectedGroup}"
+                          x:DataType="vm:GroupRowViewModel"
+                          RowDefinitions="Auto,Auto,*">
+                        <StackPanel Grid.Row="0" Orientation="Horizontal">
+                            <TextBlock Text="Name" Width="52" VerticalAlignment="Center" />
+                            <TextBox Width="220" Text="{Binding Name}" />
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="1" Margin="0,12,0,4" Classes="hint"
+                                   Text="Member executables, one per line, e.g. discord.exe. Accepts * and ? wildcards, matched case-insensitively." />
+
+                        <TextBox Grid.Row="2" AcceptsReturn="True" FontFamily="Cascadia Mono, Consolas"
+                                 VerticalContentAlignment="Top"
+                                 Text="{Binding MembersText}" />
+                    </Grid>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <TextBlock Grid.Row="1" Margin="4,12,4,0" Foreground="#FFE5484D" TextWrapping="Wrap"
+                   Text="{Binding ValidationError}" />
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="Cancel" Click="OnCancel" />
+            <Button Content="Save" Click="OnSave" Margin="0" IsDefault="True" />
+        </StackPanel>
+    </Grid>
+</Window>

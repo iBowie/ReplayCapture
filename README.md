@@ -98,8 +98,9 @@ armed indicator sits in a configurable corner and is excluded from capture.
 
 ### UI self-test
 
-WPF defers almost everything to runtime — a XAML typo or bad binding compiles cleanly and only
-fails when the control is first realised. Run this after any UI change:
+The shell (`ReplayCapture.App`) is Avalonia with compiled bindings, which catches most binding
+mistakes at build time — but a missing resource or a template-realisation bug still only shows up
+once a window actually opens. Run this after any UI change:
 
 ```bash
 ReplayCapture.exe --selftest
@@ -268,7 +269,8 @@ configured ceiling. It now divides by the number of recorders actually created.
 `XamlParseException: Cannot find non-neutral culture related to 'en-us'` the first time a templated
 control containing a MultiBinding is realised — which took down the tray context menu on the very
 first right-click. WPF's binding engine calls `XmlLanguage.GetSpecificCulture()` and needs real ICU
-data. Caught for good by `--selftest`.
+data. Caught for good by `--selftest`. (The shell has since moved to Avalonia, which has no such
+dependency — `InvariantGlobalization=true` is an open, but not yet re-verified, candidate again.)
 
 **CsWinRT objects are not COM RCWs.** A WinRT object handed out by CsWinRT cannot be cast straight
 to a `[ComImport]` interface — that throws `InvalidCastException`; the interface has to be reached

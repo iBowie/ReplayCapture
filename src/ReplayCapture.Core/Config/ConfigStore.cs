@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using ReplayCapture.Core.Diagnostics;
 
 namespace ReplayCapture.Core.Config;
@@ -11,15 +10,6 @@ public sealed class ConfigStore
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ReplayCapture");
 
     public static string FilePath { get; } = Path.Combine(DirectoryPath, "config.json");
-
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
-        ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-    };
 
     private readonly object _writeLock = new();
 
@@ -35,7 +25,7 @@ public sealed class ConfigStore
                 return fresh;
             }
 
-            var config = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(FilePath), Options)
+            var config = JsonSerializer.Deserialize(File.ReadAllText(FilePath), AppConfigJsonContext.Default.AppConfig)
                          ?? new AppConfig();
             Validate(config);
             return config;
@@ -57,7 +47,7 @@ public sealed class ConfigStore
             Directory.CreateDirectory(DirectoryPath);
             // Write-then-replace so a crash mid-write cannot leave a truncated config behind.
             var temp = FilePath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(config, Options));
+            File.WriteAllText(temp, JsonSerializer.Serialize(config, AppConfigJsonContext.Default.AppConfig));
             File.Move(temp, FilePath, overwrite: true);
         }
     }

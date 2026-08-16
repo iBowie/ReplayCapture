@@ -1,5 +1,5 @@
+using ReplayCapture.Core.Audio.Interop;
 using ReplayCapture.Core.Diagnostics;
-using Windows.Win32.Media.Audio;
 
 namespace ReplayCapture.Core.Audio;
 
@@ -116,11 +116,11 @@ internal sealed class WasapiCaptureLoop : IDisposable
             _captureClient.GetNextPacketSize(out var packetFrames);
             if (packetFrames == 0) return;
 
-            byte* data;
             ulong devicePosition;
             ulong qpcPosition;
 
-            _captureClient.GetBuffer(&data, out var framesAvailable, out var flags, &devicePosition, &qpcPosition);
+            _captureClient.GetBuffer(out var dataPtr, out var framesAvailable, out var flags, &devicePosition, &qpcPosition);
+            var data = (byte*)dataPtr;
 
             try
             {

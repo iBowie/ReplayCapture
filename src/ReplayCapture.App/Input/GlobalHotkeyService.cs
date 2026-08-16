@@ -1,25 +1,22 @@
 using System.ComponentModel;
-using System.Windows.Interop;
+using ReplayCapture.App.Native;
 using ReplayCapture.Core.Diagnostics;
 using ReplayCapture.Core.Input;
 using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.UI.Input.KeyboardAndMouse;
 
 namespace ReplayCapture.App.Input;
 
 /// <summary>
 /// Owns the process-wide <c>RegisterHotKey</c> registration on a message-only window.
-/// <para>
-/// The window is deliberately message-only (<c>HWND_MESSAGE</c>): it never appears on screen, in
-/// the taskbar, or in Alt+Tab, but it still receives <c>WM_HOTKEY</c>.
-/// </para>
 /// </summary>
 public sealed class GlobalHotkeyService : IDisposable
 {
     private const int WmHotkey = 0x0312;
     private const int HotkeyId = 0xB0B;
-    private static readonly IntPtr HwndMessage = new(-3);
 
-    private HwndSource? _source;
+    private MessageOnlyWindow? _window;
     private bool _registered;
 
     /// <summary>Raised on the UI thread when the bound hotkey fires.</summary>
@@ -39,9 +36,9 @@ public sealed class GlobalHotkeyService : IDisposable
         Unbind();
 
         if (!PInvoke.RegisterHotKey(
-                new Windows.Win32.Foundation.HWND(_source!.Handle),
+                _window!.Handle,
                 HotkeyId,
-                (Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS)binding.Modifiers,
+                (HOT_KEY_MODIFIERS)binding.Modifiers,
                 binding.VirtualKey))
         {
             var win32 = new Win32Exception();
@@ -61,23 +58,16 @@ public sealed class GlobalHotkeyService : IDisposable
 
     private void EnsureWindow()
     {
-        if (_source is not null) return;
+        if (_window is not null) return;
 
-        _source = new HwndSource(new HwndSourceParameters("ReplayCapture.HotkeySink")
-        {
-            ParentWindow = HwndMessage,
-            WindowStyle = 0,
-            Width = 0,
-            Height = 0,
-        });
-        _source.AddHook(WndProc);
+        _window = new MessageOnlyWindow("ReplayCapture.HotkeySink");
+        _window.MessageReceived += OnMessage;
     }
 
-    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    private LRESULT? OnMessage(uint msg, WPARAM wParam, LPARAM lParam)
     {
-        if (msg != WmHotkey || wParam.ToInt32() != HotkeyId) return IntPtr.Zero;
+        if (msg != WmHotkey || (int)wParam.Value != HotkeyId) return null;
 
-        handled = true;
         try
         {
             Pressed?.Invoke();
@@ -88,13 +78,13 @@ public sealed class GlobalHotkeyService : IDisposable
             Log.Error("Hotkey handler threw", ex);
         }
 
-        return IntPtr.Zero;
+        return new LRESULT(0);
     }
 
     private void Unbind()
     {
-        if (!_registered || _source is null) return;
-        PInvoke.UnregisterHotKey(new Windows.Win32.Foundation.HWND(_source.Handle), HotkeyId);
+        if (!_registered || _window is null) return;
+        PInvoke.UnregisterHotKey(_window.Handle, HotkeyId);
         _registered = false;
         Current = null;
     }
@@ -102,8 +92,7 @@ public sealed class GlobalHotkeyService : IDisposable
     public void Dispose()
     {
         Unbind();
-        _source?.RemoveHook(WndProc);
-        _source?.Dispose();
-        _source = null;
+        _window?.Dispose();
+        _window = null;
     }
 }

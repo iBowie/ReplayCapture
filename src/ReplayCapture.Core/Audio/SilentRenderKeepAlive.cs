@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
+using ReplayCapture.Core.Audio.Interop;
 using ReplayCapture.Core.Diagnostics;
 using Windows.Win32.Media.Audio;
-using Windows.Win32.System.Com;
 
 namespace ReplayCapture.Core.Audio;
 
@@ -31,19 +31,19 @@ internal sealed unsafe class SilentRenderKeepAlive : IDisposable
     public SilentRenderKeepAlive(IMMDevice device)
     {
         var audioClientIid = typeof(IAudioClient).GUID;
-        device.Activate(&audioClientIid, CLSCTX.CLSCTX_ALL, null, out var clientObject);
-        _client = (IAudioClient)clientObject;
+        device.Activate(audioClientIid, Clsctx.All, 0, out var clientPtr);
+        _client = ComInterop.WrapAndRelease<IAudioClient>(clientPtr);
 
-        WAVEFORMATEX* mixFormat;
-        _client.GetMixFormat(&mixFormat);
+        _client.GetMixFormat(out var mixFormatPtr);
+        var mixFormat = (WAVEFORMATEX*)mixFormatPtr;
         try
         {
             _client.Initialize(
-                AUDCLNT_SHAREMODE.AUDCLNT_SHAREMODE_SHARED,
+                AudclntSharemode.Shared,
                 0,
                 200 * TimeSpan.TicksPerMillisecond,
                 0,
-                mixFormat,
+                (nint)mixFormat,
                 null);
             _blockAlign = mixFormat->nBlockAlign;
         }
@@ -55,8 +55,8 @@ internal sealed unsafe class SilentRenderKeepAlive : IDisposable
         _client.GetBufferSize(out _bufferFrames);
 
         var renderIid = typeof(IAudioRenderClient).GUID;
-        _client.GetService(&renderIid, out var renderObject);
-        _renderClient = (IAudioRenderClient)renderObject;
+        _client.GetService(renderIid, out var renderPtr);
+        _renderClient = ComInterop.WrapAndRelease<IAudioRenderClient>(renderPtr);
 
         // Every WASAPI render sample fills the whole buffer with silence before the first Start —
         // starting from empty produces exactly the glitch this class exists to avoid.
@@ -101,8 +101,8 @@ internal sealed unsafe class SilentRenderKeepAlive : IDisposable
 
     private void FillSilence(uint frames)
     {
-        byte* data;
-        _renderClient.GetBuffer(frames, &data);
+        _renderClient.GetBuffer(frames, out var dataPtr);
+        var data = (byte*)dataPtr;
         // GetBuffer's contents are undefined, and not every driver/APO chain actually honors
         // BufferflagsSilent by discarding what's here — some mix the raw bytes in regardless. Zero
         // the buffer explicitly so the packet is real silence even on those drivers; the flag is kept

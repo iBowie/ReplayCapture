@@ -1,7 +1,0 @@
-<Application x:Class="ReplayCapture.App.App"
-             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             ShutdownMode="OnExplicitShutdown">
-    <!-- No StartupUri: this app lives in the notification area and has no main window. -->
-    <Application.Resources />
-</Application>

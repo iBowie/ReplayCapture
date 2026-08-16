@@ -1,5 +1,4 @@
-using System.Windows;
-using System.Windows.Threading;
+using Avalonia.Threading;
 using ReplayCapture.App.Overlay;
 using ReplayCapture.App.Tray;
 using ReplayCapture.App.Views;
@@ -11,10 +10,9 @@ namespace ReplayCapture.App.Startup;
 /// <summary>
 /// Headless UI smoke test, run with <c>--selftest</c>.
 /// <para>
-/// WPF defers almost everything to runtime: a XAML typo, a bad binding path or a missing resource
-/// compiles cleanly and only fails when the control is first realised. This exercises every window
-/// and — importantly — opens the tray context menu, because realising its templates is exactly what
-/// crashed the app the first time it was run for real.
+/// Avalonia, like WPF, defers binding/template problems to runtime: this exercises every window
+/// and the tray menu build so a broken binding path or missing resource fails a build rather than
+/// only showing up the first time a user opens it.
 /// </para>
 /// </summary>
 internal static class SelfTest
@@ -39,9 +37,7 @@ internal static class SelfTest
             tray.SetState(BufferState.Armed, "selftest");
         });
 
-        // The regression that matters: this is the code path that threw
-        // "Cannot find non-neutral culture related to 'en-us'".
-        Check(failures, "tray context menu templates", () => tray!.OpenMenuForDiagnostics());
+        Check(failures, "tray context menu", () => tray!.OpenMenuForDiagnostics());
 
         IndicatorWindow? indicator = null;
         Check(failures, "indicator window", () =>
@@ -58,7 +54,6 @@ internal static class SelfTest
         {
             var settings = new SettingsWindow(config);
             settings.Show();
-            // Force a full layout pass so every tab's templates and bindings are realised.
             settings.UpdateLayout();
             settings.Close();
         });
@@ -96,9 +91,9 @@ internal static class SelfTest
         {
             action();
 
-            // Let the dispatcher run so deferred layout and template work actually happens before
-            // the next check — otherwise a failure would surface against the wrong step.
-            Application.Current.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+            // Lets deferred layout and template work actually happen before the next check —
+            // otherwise a failure would surface against the wrong step.
+            Dispatcher.UIThread.RunJobs();
             Console.WriteLine($"  ok    {what}");
         }
         catch (Exception ex)

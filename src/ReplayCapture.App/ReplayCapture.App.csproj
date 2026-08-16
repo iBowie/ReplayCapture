@@ -4,9 +4,19 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>ReplayCapture.App</RootNamespace>
     <AssemblyName>ReplayCapture</AssemblyName>
-    <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\armed.ico</ApplicationIcon>
+    <!-- Writes CsWin32's generated interop to obj/generated so the exact signatures are readable. -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+    <!-- Classic (reflection-based) bindings resolve properties by name at runtime, which Native
+         AOT's trimmer cannot see through — it strips ViewModel property accessors it has no
+         compile-time evidence are used, and every binding then silently resolves to nothing (this
+         is exactly what happened: SettingsWindow rendered with every bound value blank under the
+         AOT publish). Compiled bindings generate real code at build time instead, so they need no
+         reflection and survive trimming; this also turns a missing/typo'd binding path into a build
+         error instead of a silent blank field. -->
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,7 +25,18 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <PackageReference Include="H.NotifyIcon.Wpf" Version="2.4.1" />
+    <!-- Microsoft.Win32.SystemEvents (resume-from-sleep detection) and System.Media.SystemSounds
+         (save confirmation sound): both pulled in transitively by UseWPF in the WPF shell, need an
+         explicit reference here since Avalonia doesn't bring them. -->
+    <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.11" />
+    <PackageReference Include="System.Windows.Extensions" Version="10.0.11" />
+    <!-- Pinned to the 11.3.x line, not the newer 12.x major: Avalonia.Diagnostics has no 12.x
+         release yet, and shipping without a working Debug-time devtools overlay is worse than
+         being one major version behind on the core packages. -->
+    <PackageReference Include="Avalonia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.20" Condition="'$(Configuration)' == 'Debug'" />
     <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.298">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -23,7 +44,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\*.ico" />
+    <!-- Loose files, not AvaloniaResource: the tray icon is hand-rolled Shell_NotifyIcon (see
+         Tray/TrayController.cs), which loads icons from disk via LoadImage, not from an avares:// URI. -->
+    <Content Include="Assets\*.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

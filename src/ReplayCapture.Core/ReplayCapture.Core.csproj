@@ -5,6 +5,9 @@
     <!-- Writes CsWin32's generated interop to obj/generated so the exact signatures are readable. -->
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+    <!-- Warm-up for the Native AOT migration: surfaces IL2026/IL3050-class trim/AOT analyzer
+         warnings during ordinary builds, ahead of the CsWin32/CsWinRT COM interop remediation. -->
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>

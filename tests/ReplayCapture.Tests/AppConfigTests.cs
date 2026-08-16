@@ -5,11 +5,13 @@ namespace ReplayCapture.Tests;
 
 public class AppConfigTests
 {
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
+    // Exercises the same source-generated JsonTypeInfo<AppConfig> that ConfigStore uses in
+    // production, rather than reflection-based serialization, so these tests catch a type added to
+    // AppConfig that the AOT-safe source generator can't handle, not just a type JSON can handle.
+    private static AppConfig RoundTrip(AppConfig config) =>
+        JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(config, AppConfigJsonContext.Default.AppConfig),
+            AppConfigJsonContext.Default.AppConfig)!;
 
     [Fact]
     public void Default_audio_tracks_all_parse()
@@ -64,8 +66,7 @@ public class AppConfigTests
             ],
         };
 
-        var restored = JsonSerializer.Deserialize<AppConfig>(
-            JsonSerializer.Serialize(config, Options), Options)!;
+        var restored = RoundTrip(config);
 
         Assert.Equal(8, restored.AudioTracks.Count);
         Assert.Equal("Alerts", restored.AudioTracks[^1].Name);
@@ -87,8 +88,7 @@ public class AppConfigTests
             ],
         };
 
-        var restored = JsonSerializer.Deserialize<AppConfig>(
-            JsonSerializer.Serialize(config, Options), Options)!;
+        var restored = RoundTrip(config);
 
         Assert.Equal(45, restored.BufferSeconds);
         Assert.Equal("Ctrl+Alt+R", restored.Hotkey);
@@ -117,8 +117,7 @@ public class AppConfigTests
     {
         var config = new AppConfig { CaptureBackend = CaptureBackend.Wgc };
 
-        var restored = JsonSerializer.Deserialize<AppConfig>(
-            JsonSerializer.Serialize(config, Options), Options)!;
+        var restored = RoundTrip(config);
 
         Assert.Equal(CaptureBackend.Wgc, restored.CaptureBackend);
     }
@@ -134,8 +133,7 @@ public class AppConfigTests
     {
         var config = new AppConfig { VideoEncoderBackend = VideoEncoderBackend.X264 };
 
-        var restored = JsonSerializer.Deserialize<AppConfig>(
-            JsonSerializer.Serialize(config, Options), Options)!;
+        var restored = RoundTrip(config);
 
         Assert.Equal(VideoEncoderBackend.X264, restored.VideoEncoderBackend);
     }
@@ -151,8 +149,7 @@ public class AppConfigTests
             },
         };
 
-        var restored = JsonSerializer.Deserialize<AppConfig>(
-            JsonSerializer.Serialize(config, Options), Options)!;
+        var restored = RoundTrip(config);
 
         Assert.True(AudioSourceSpec.TryResolveGroup("comms", restored.ProcessGroups, out var members));
         Assert.Equal(["discord.exe", "telegram.exe"], members);

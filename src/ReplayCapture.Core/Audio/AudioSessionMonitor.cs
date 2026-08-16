@@ -1,6 +1,6 @@
 using System.Diagnostics;
+using ReplayCapture.Core.Audio.Interop;
 using ReplayCapture.Core.Diagnostics;
-using Windows.Win32.Media.Audio;
 
 namespace ReplayCapture.Core.Audio;
 
@@ -38,9 +38,13 @@ public static class AudioSessionMonitor
             {
                 try
                 {
-                    enumerator.GetSession(i, out var control);
-                    if (control is not IAudioSessionControl2 control2) continue;
+                    enumerator.GetSession(i, out var controlPtr);
+                    if (controlPtr == 0) continue;
 
+                    // Every session control this API returns is documented to also implement
+                    // IAudioSessionControl2, so the raw pointer is wrapped directly as that concrete
+                    // type rather than through a dynamic COM cast (unsupported under the new interop).
+                    var control2 = ComInterop.WrapAndRelease<IAudioSessionControl2>(controlPtr);
                     control2.GetProcessId(out var processId);
 
                     // pid 0 is the system mix; and one process commonly holds several sessions.

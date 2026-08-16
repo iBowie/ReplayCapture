@@ -1,5 +1,42 @@
+// --- Message-only windows (global hotkey sink, tray icon sink) ---
+RegisterClassEx
+CreateWindowEx
+DefWindowProc
+DestroyWindow
+UnregisterClass
+WNDCLASSEXW
+WNDPROC
+DestroyIcon
+
+// --- Global hotkey ---
 RegisterHotKey
 UnregisterHotKey
+
+// --- Tray icon (hand-rolled Shell_NotifyIcon; no cross-platform tray-with-balloons package exists) ---
+Shell_NotifyIcon
+NOTIFYICONDATAW
+LoadImage
+IMAGE_FLAGS
+GDI_IMAGE_TYPE
+CreatePopupMenu
+AppendMenu
+DestroyMenu
+TrackPopupMenuEx
+TRACK_POPUP_MENU_FLAGS
+SetForegroundWindow
+PostMessage
+GetCursorPos
+WM_APP
+WM_NULL
+WM_LBUTTONUP
+WM_RBUTTONUP
+WM_CONTEXTMENU
+WM_COMMAND
+
+// --- Second-instance notice (no Avalonia window exists yet at that point) ---
+MessageBox
+
+// --- Indicator window (click-through, excluded from capture) ---
 SetWindowDisplayAffinity
 WINDOW_DISPLAY_AFFINITY
 GetWindowLongPtr

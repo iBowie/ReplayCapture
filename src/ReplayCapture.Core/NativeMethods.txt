@@ -18,45 +18,33 @@ EnumDisplaySettingsW
 MonitorFromWindow
 
 // --- Audio: WASAPI core ---
-IMMDeviceEnumerator
-MMDeviceEnumerator
-IMMDevice
-IMMDeviceCollection
-IMMNotificationClient
-IAudioClient
-IAudioCaptureClient
-IAudioRenderClient
-IAudioClock
+// IMMDeviceEnumerator, IMMDevice, IMMDeviceCollection, IMMNotificationClient, IAudioClient,
+// IAudioCaptureClient, IAudioRenderClient, IPropertyStore, IAudioSessionManager2,
+// IAudioSessionEnumerator and IAudioSessionControl2 are hand-declared in
+// Audio/Interop/WasapiInterop.cs as [GeneratedComInterface]s instead of being generated here —
+// CsWin32 only emits classic [ComImport]-based COM interop, which Native AOT does not support.
+// Their enum/struct parameters (EDataFlow, DEVICE_STATE, CLSCTX, STGM, AUDCLNT_SHAREMODE,
+// PROPERTYKEY, PCWSTR) are likewise hand-declared as local mirror types in WasapiInterop.cs, cast
+// to/from these CsWin32 types at each call site — empirically, ComInterfaceGenerator cannot
+// validate blittability for a type produced by a different source generator in the same
+// compilation (SYSLIB1051), even though an identical locally-declared type works fine. PROPVARIANT
+// stays CsWin32-generated (via a local mirror layout bridged with Unsafe.As) since PropVariantClear
+// — plain CsWin32 P/Invoke, not COM interop — needs the real type.
 EDataFlow
 ERole
-DEVICE_STATE
 WAVEFORMATEX
 WAVEFORMATEXTENSIBLE
-AUDCLNT_SHAREMODE
 AUDCLNT_STREAMFLAGS_LOOPBACK
 AUDCLNT_STREAMFLAGS_EVENTCALLBACK
 AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
 AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY
 _AUDCLNT_BUFFERFLAGS
-IPropertyStore
-STGM
 PropVariantClear
 CoTaskMemFree
-
-// --- Audio: session enumeration ---
-// Used to discover which processes are *actually* producing audio. Without this, a "everything
-// except X" track would have to attach a loopback client to every running process.
-IAudioSessionManager2
-IAudioSessionEnumerator
-IAudioSessionControl2
-AudioSessionState
+PROPVARIANT
 
 // --- Audio: per-process loopback (Windows 10 20348+) ---
-ActivateAudioInterfaceAsync
-IActivateAudioInterfaceCompletionHandler
-IActivateAudioInterfaceAsyncOperation
-AUDIOCLIENT_ACTIVATION_PARAMS
-AUDIOCLIENT_ACTIVATION_TYPE
-AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS
-PROCESS_LOOPBACK_MODE
-VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK
+// ActivateAudioInterfaceAsync, IActivateAudioInterfaceCompletionHandler and
+// IActivateAudioInterfaceAsyncOperation are hand-declared in ProcessLoopbackSource.cs as
+// [GeneratedComInterface]s instead of being generated here — CsWin32 only emits classic
+// [ComImport]-based COM interop, which Native AOT does not support.

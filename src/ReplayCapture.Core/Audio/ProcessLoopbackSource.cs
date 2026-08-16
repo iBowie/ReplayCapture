@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
+using ReplayCapture.Core.Audio.Interop;
 using ReplayCapture.Core.Diagnostics;
 using Sdcb.FFmpeg.Raw;
 using Windows.Win32.Media.Audio;
@@ -15,7 +17,7 @@ namespace ReplayCapture.Core.Audio;
 /// the resulting <c>IAudioClient</c> arrives on a COM callback rather than as a return value.
 /// </para>
 /// </summary>
-public sealed unsafe class ProcessLoopbackSource : IAudioSource
+public sealed unsafe partial class ProcessLoopbackSource : IAudioSource
 {
     /// <summary>Device interface path of the process-loopback virtual device.</summary>
     private const string VirtualAudioDeviceProcessLoopback = "VAD\\Process_Loopback";
@@ -55,20 +57,20 @@ public sealed unsafe class ProcessLoopbackSource : IAudioSource
         };
 
         client.Initialize(
-            AUDCLNT_SHAREMODE.AUDCLNT_SHAREMODE_SHARED,
+            AudclntSharemode.Shared,
             Constants.StreamflagsLoopback | Constants.StreamflagsEventcallback,
             BufferDurationTicks,
             0,
-            &format,
+            (nint)(&format),
             null);
 
         var captureIid = typeof(IAudioCaptureClient).GUID;
-        client.GetService(&captureIid, out var captureObject);
+        client.GetService(captureIid, out var capturePtr);
 
         var resampler = new AudioResampler(AudioFormat.SampleRate, AudioFormat.Channels, AVSampleFormat.S16);
 
         _loop = new WasapiCaptureLoop(
-            client, (IAudioCaptureClient)captureObject, resampler, Name,
+            client, ComInterop.WrapAndRelease<IAudioCaptureClient>(capturePtr), resampler, Name,
             (qpc, samples) => SamplesReady?.Invoke(qpc, samples));
 
         Log.Info($"Process loopback attached to {Name}.");
@@ -105,12 +107,14 @@ public sealed unsafe class ProcessLoopbackSource : IAudioSource
             var task = Task.Run(() =>
             {
                 var audioClientIid = typeof(IAudioClient).GUID;
-                ActivateAudioInterfaceAsync(
+                // LibraryImport-generated stubs always preserve the native signature, unlike classic
+                // DllImport's PreserveSig=false — the HRESULT has to be checked explicitly here.
+                Marshal.ThrowExceptionForHR(ActivateAudioInterfaceAsync(
                     VirtualAudioDeviceProcessLoopback,
                     in audioClientIid,
                     propVariant,
                     completion,
-                    out _);
+                    out _));
 
                 if (!completion.Completed.Wait(TimeSpan.FromSeconds(5)))
                     throw new TimeoutException("ActivateAudioInterfaceAsync did not complete within 5s.");
@@ -118,7 +122,7 @@ public sealed unsafe class ProcessLoopbackSource : IAudioSource
                 if (completion.HResult < 0)
                     Marshal.ThrowExceptionForHR(completion.HResult);
 
-                return (IAudioClient)completion.Interface!;
+                return completion.Interface!;
             });
 
             return task.GetAwaiter().GetResult();
@@ -136,49 +140,55 @@ public sealed unsafe class ProcessLoopbackSource : IAudioSource
 
     // --- Interop that CsWin32 cannot supply ------------------------------------------------
     // CsWin32 emits IActivateAudioInterfaceCompletionHandler and IActivateAudioInterfaceAsyncOperation
-    // as *empty* interfaces, so they are declared by hand here. The handler in particular has to be
-    // implemented in managed code, which needs a real method on the interface.
+    // as *empty* interfaces, so they are declared by hand here as [GeneratedComInterface]s — the
+    // source-generated, ComWrappers-based interop that Native AOT requires in place of classic
+    // [ComImport]. The handler in particular has to be implemented in managed code and handed to
+    // native code, which is the direction [GeneratedComClass] (below) exists for.
 
-    [DllImport("Mmdevapi.dll", ExactSpelling = true, PreserveSig = false)]
-    private static extern void ActivateAudioInterfaceAsync(
+    [LibraryImport("Mmdevapi.dll")]
+    private static partial int ActivateAudioInterfaceAsync(
         [MarshalAs(UnmanagedType.LPWStr)] string deviceInterfacePath,
         in Guid riid,
         IntPtr activationParams,
         IActivateAudioInterfaceCompletionHandler completionHandler,
         out IActivateAudioInterfaceAsyncOperation operation);
 
-    [ComImport]
+    [GeneratedComInterface]
     [Guid("41D949AB-9862-444A-80F6-C261334DA5EB")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IActivateAudioInterfaceCompletionHandler
+    internal partial interface IActivateAudioInterfaceCompletionHandler
     {
         void ActivateCompleted(IActivateAudioInterfaceAsyncOperation operation);
     }
 
-    [ComImport]
+    [GeneratedComInterface]
     [Guid("72A22D78-CDE4-431D-B8CC-843A71199B6D")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IActivateAudioInterfaceAsyncOperation
+    internal partial interface IActivateAudioInterfaceAsyncOperation
     {
-        void GetActivateResult(
-            out int activateResult,
-            [MarshalAs(UnmanagedType.IUnknown)] out object activatedInterface);
+        // The activated interface comes back as a raw pointer rather than a wrapped object: the new
+        // source-generated COM interop has no equivalent of classic interop's dynamic
+        // [MarshalAs(UnmanagedType.IUnknown)] "give me whatever COM type this is" marshaling, which
+        // Native AOT cannot support (it needs the concrete interface known at compile time). We
+        // requested IAudioClient specifically via the riid passed to ActivateAudioInterfaceAsync, so
+        // the caller knows what the pointer actually is.
+        void GetActivateResult(out int activateResult, out nint activatedInterface);
     }
 
     /// <summary>Receives the activated <c>IAudioClient</c> on a COM callback thread.</summary>
-    private sealed class ActivationHandler : IActivateAudioInterfaceCompletionHandler
+    [GeneratedComClass]
+    private sealed partial class ActivationHandler : IActivateAudioInterfaceCompletionHandler, IAgileObject
     {
         public ManualResetEventSlim Completed { get; } = new(false);
         public int HResult { get; private set; }
-        public object? Interface { get; private set; }
+        public IAudioClient? Interface { get; private set; }
 
         public void ActivateCompleted(IActivateAudioInterfaceAsyncOperation operation)
         {
             try
             {
-                operation.GetActivateResult(out var result, out var activated);
+                operation.GetActivateResult(out var result, out var activatedInterface);
                 HResult = result;
-                Interface = activated;
+                if (activatedInterface != 0)
+                    Interface = ComInterop.WrapAndRelease<IAudioClient>(activatedInterface);
             }
             catch (Exception ex)
             {

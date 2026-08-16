@@ -1,7 +1,9 @@
-using System.IO; // WPF's implicit usings omit System.IO (System.Windows.Shapes.Path collides).
 using System.Media;
-using System.Windows;
-using System.Windows.Threading;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using Microsoft.Win32;
 using ReplayCapture.App.Input;
 using ReplayCapture.App.Overlay;
@@ -12,6 +14,9 @@ using ReplayCapture.Core;
 using ReplayCapture.Core.Config;
 using ReplayCapture.Core.Diagnostics;
 using ReplayCapture.Core.Input;
+using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace ReplayCapture.App;
 
@@ -26,6 +31,7 @@ public partial class App : Application
     /// </summary>
     private static readonly TimeSpan ResumeSettleDelay = TimeSpan.FromSeconds(3);
 
+    private IClassicDesktopStyleApplicationLifetime? _desktop;
     private Mutex? _singleInstance;
     private ConfigStore _configStore = null!;
     private AppConfig _config = null!;
@@ -38,37 +44,54 @@ public partial class App : Application
     private string? _sessionError;
     private int _saveInProgress;
 
-    protected override void OnStartup(StartupEventArgs e)
-    {
-        base.OnStartup(e);
+    public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
+    public override void OnFrameworkInitializationCompleted()
+    {
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            _desktop = desktop;
+
+            if (desktop.Args?.Contains("--selftest", StringComparer.OrdinalIgnoreCase) == true)
+            {
+                desktop.Shutdown(SelfTest.Run());
+            }
+            else
+            {
+                Start(desktop);
+            }
+        }
+
+        base.OnFrameworkInitializationCompleted();
+    }
+
+    private void Start(IClassicDesktopStyleApplicationLifetime desktop)
+    {
         _singleInstance = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isFirst);
         if (!isFirst)
         {
-            // A second elevated copy would fight the first for the hotkey registration.
-            MessageBox.Show(
+            // A second elevated copy would fight the first for the hotkey registration. No Avalonia
+            // window exists yet at this point, so this goes through raw Win32 rather than a dialog.
+            PInvoke.MessageBox(
+                default(HWND),
                 "ReplayCapture is already running. Look for it in the notification area.",
-                "ReplayCapture", MessageBoxButton.OK, MessageBoxImage.Information);
-            Shutdown();
+                "ReplayCapture",
+                MESSAGEBOX_STYLE.MB_OK | MESSAGEBOX_STYLE.MB_ICONINFORMATION);
+            desktop.Shutdown();
             return;
         }
 
-        DispatcherUnhandledException += (_, args) =>
-        {
-            Log.Error("Unhandled dispatcher exception", args.Exception);
-            args.Handled = true;
-        };
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
             Log.Error("Unhandled domain exception", args.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Log.Error("Unobserved task exception", args.Exception);
+            args.SetObserved();
+        };
 
         Log.Info($"ReplayCapture starting — elevated: {ElevationInfo.IsElevated}, " +
-                 $"args: [{string.Join(' ', e.Args)}]");
-
-        if (e.Args.Contains("--selftest", StringComparer.OrdinalIgnoreCase))
-        {
-            Shutdown(SelfTest.Run());
-            return;
-        }
+                 $"args: [{string.Join(' ', desktop.Args ?? [])}]");
 
         _configStore = new ConfigStore();
         _config = _configStore.Load();
@@ -76,7 +99,7 @@ public partial class App : Application
         _tray = new TrayController(_config, StartupTaskInstaller.IsInstalled());
         _tray.SaveRequested += OnSaveRequested;
         _tray.SettingsRequested += OnSettingsRequested;
-        _tray.ExitRequested += () => Shutdown();
+        _tray.ExitRequested += () => desktop.Shutdown();
         _tray.StartWithWindowsToggled += OnStartWithWindowsToggled;
 
         BindHotkey();
@@ -93,6 +116,8 @@ public partial class App : Application
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _statusTimer.Tick += (_, _) => UpdateStatus();
         _statusTimer.Start();
+
+        desktop.ShutdownRequested += (_, _) => OnShutdown();
 
         StartSession();
     }
@@ -165,7 +190,7 @@ public partial class App : Application
     /// The session detected something it cannot heal in place — a lost GPU or a changed set of
     /// displays. Rebuild it rather than leaving a dead buffer that still looks armed.
     /// </summary>
-    private void OnRecoveryRequired(string reason) => Dispatcher.InvokeAsync(() => RebuildCapture(reason));
+    private void OnRecoveryRequired(string reason) => Dispatcher.UIThread.InvokeAsync(() => RebuildCapture(reason));
 
     /// <summary>
     /// The system woke from sleep. GPU device loss and closed capture items are already caught by
@@ -180,7 +205,7 @@ public partial class App : Application
 
         Log.Info("System resumed from sleep; capture will rebuild shortly.");
         Task.Delay(ResumeSettleDelay).ContinueWith(
-            _ => Dispatcher.InvokeAsync(() => RebuildCapture("the system resumed from sleep")),
+            _ => Dispatcher.UIThread.InvokeAsync(() => RebuildCapture("the system resumed from sleep")),
             TaskScheduler.Default);
     }
 
@@ -297,7 +322,7 @@ public partial class App : Application
 
     private void OnSettingsRequested()
     {
-        var existing = Windows.OfType<SettingsWindow>().FirstOrDefault();
+        var existing = _desktop?.Windows.OfType<SettingsWindow>().FirstOrDefault();
         if (existing is not null)
         {
             existing.Activate();
@@ -305,9 +330,8 @@ public partial class App : Application
         }
 
         var window = new SettingsWindow(_config);
-        if (window.ShowDialog() != true || window.Result is null) return;
-
-        ApplyConfig(window.Result);
+        window.Saved += ApplyConfig;
+        window.Show();
     }
 
     private void ApplyConfig(AppConfig updated)
@@ -456,7 +480,7 @@ public partial class App : Application
         }
     }
 
-    protected override void OnExit(ExitEventArgs e)
+    private void OnShutdown()
     {
         Log.Info("ReplayCapture shutting down.");
 
@@ -467,7 +491,5 @@ public partial class App : Application
         _indicator?.Close();
         _tray?.Dispose();
         _singleInstance?.Dispose();
-
-        base.OnExit(e);
     }
 }

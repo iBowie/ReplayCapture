@@ -1,0 +1,9 @@
+<Application x:Class="ReplayCapture.App.App"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             RequestedThemeVariant="Dark">
+    <!-- No main window: this app lives in the notification area only. -->
+    <Application.Styles>
+        <FluentTheme />
+    </Application.Styles>
+</Application>

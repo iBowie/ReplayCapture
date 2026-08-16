@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
+using ReplayCapture.Core.Audio.Interop;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Windows.Graphics.Capture;
@@ -10,7 +12,7 @@ namespace ReplayCapture.Core.Capture;
 /// The COM plumbing that joins Windows.Graphics.Capture (a WinRT API) to Direct3D 11 (a classic COM
 /// API). None of these bridges are projected into C#, so they have to be declared by hand.
 /// </summary>
-internal static class Direct3DInterop
+internal static partial class Direct3DInterop
 {
     /// <summary>IID of the WinRT <c>GraphicsCaptureItem</c> runtime class.</summary>
     private static readonly Guid GraphicsCaptureItemIid = new("79C3F95B-31F7-4EC2-A464-632EF5D30760");
@@ -18,14 +20,25 @@ internal static class Direct3DInterop
     /// <summary>
     /// Lets us build a <see cref="GraphicsCaptureItem"/> from an HMONITOR or HWND. WinRT itself
     /// only exposes the interactive picker; the interop interface is the non-interactive route.
+    /// <para>
+    /// Declared as <c>[GeneratedComInterface]</c>, not classic <c>[ComImport]</c>: under Native AOT,
+    /// CsWinRT's own <c>IObjectReference.AsInterface&lt;T&gt;()</c> throws
+    /// <c>NotSupportedException</c> ("COM Interop requires ComWrapper instance registered for
+    /// marshalling") for an arbitrary hand-declared classic COM interface, since AOT ships no
+    /// built-in COM RCW system and nothing registers a global <c>ComWrappers</c> for types CsWinRT
+    /// doesn't itself know about. The fix is the same one used throughout <c>Audio/Interop</c>: get
+    /// the raw activation-factory pointer via <see cref="WinRT.IObjectReference.GetRef"/>,
+    /// <c>QueryInterface</c> it by hand, and wrap the result via
+    /// <see cref="ComInterop.WrapAndRelease{T}"/> — bypassing CsWinRT's marshaller entirely for this
+    /// one non-projected interface.
+    /// </para>
     /// </summary>
-    [ComImport]
+    [GeneratedComInterface]
     [Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IGraphicsCaptureItemInterop
+    internal partial interface IGraphicsCaptureItemInterop
     {
-        IntPtr CreateForWindow([In] IntPtr window, [In] ref Guid iid);
-        IntPtr CreateForMonitor([In] IntPtr monitor, [In] ref Guid iid);
+        nint CreateForWindow(nint window, in Guid iid);
+        nint CreateForMonitor(nint monitor, in Guid iid);
     }
 
     /// <summary>
@@ -50,12 +63,23 @@ internal static class Direct3DInterop
     /// <summary>Creates a capture item for a monitor, identified by its HMONITOR.</summary>
     public static GraphicsCaptureItem CreateItemForMonitor(IntPtr monitorHandle)
     {
-        var interop = WinRT.ActivationFactory
-            .Get("Windows.Graphics.Capture.GraphicsCaptureItem")
-            .AsInterface<IGraphicsCaptureItemInterop>();
+        using var factory = WinRT.ActivationFactory.Get("Windows.Graphics.Capture.GraphicsCaptureItem");
+        var factoryPtr = factory.GetRef();
+
+        IGraphicsCaptureItemInterop interop;
+        try
+        {
+            var interopIid = typeof(IGraphicsCaptureItemInterop).GUID;
+            Marshal.ThrowExceptionForHR(Marshal.QueryInterface(factoryPtr, in interopIid, out var interopPtr));
+            interop = ComInterop.WrapAndRelease<IGraphicsCaptureItemInterop>(interopPtr);
+        }
+        finally
+        {
+            Marshal.Release(factoryPtr);
+        }
 
         var iid = GraphicsCaptureItemIid;
-        var abi = interop.CreateForMonitor(monitorHandle, ref iid);
+        var abi = interop.CreateForMonitor(monitorHandle, in iid);
         if (abi == IntPtr.Zero)
             throw new InvalidOperationException($"CreateForMonitor returned null for HMONITOR 0x{monitorHandle:X}.");
 

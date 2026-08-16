@@ -16,10 +16,13 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
 
     <!--
-      Globalization must stay ON. With InvariantGlobalization=true, WPF's binding engine throws
-      "Cannot find non-neutral culture related to 'en-us'" from XmlLanguage.GetSpecificCulture()
-      the moment any templated control with a MultiBinding is realised — which took down the tray
-      context menu on first right-click.
+      Left OFF for now, unchanged from before the WPF → Avalonia migration. The original reason
+      (WPF's binding engine throwing "Cannot find non-neutral culture related to 'en-us'" from
+      XmlLanguage.GetSpecificCulture() the moment a templated MultiBinding control was realised) no
+      longer applies now that the WPF shell is gone — Avalonia has no such dependency. This is a
+      real candidate to flip to true post-migration (smaller AOT-published binaries, faster
+      startup), but it hasn't been re-verified against the Avalonia shell yet; treat that as a
+      distinct, deliberate change to test, not an incidental toggle.
     -->
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>

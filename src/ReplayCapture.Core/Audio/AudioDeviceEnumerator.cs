@@ -1,9 +1,7 @@
+using System.Runtime.InteropServices;
 using ReplayCapture.Core.Diagnostics;
 using Windows.Win32;
-using Windows.Win32.Foundation;
 using Windows.Win32.Media.Audio;
-using Windows.Win32.System.Com;
-using Windows.Win32.UI.Shell.PropertiesSystem;
 
 namespace ReplayCapture.Core.Audio;
 
@@ -28,13 +26,16 @@ public sealed record AudioEndpointInfo
 /// Resolves audio endpoints. Keeps the COM interfaces internal so the rest of the app deals in
 /// endpoint ids and names rather than in <c>IMMDevice</c>.
 /// </summary>
-public static class AudioDeviceEnumerator
+public static partial class AudioDeviceEnumerator
 {
+    private static readonly Guid ClsidMMDeviceEnumerator = new("BCDE0395-E52F-467C-8E3D-C4579291692E");
+    private const uint ClsctxInprocServer = 0x1;
+
     /// <summary>
     /// PKEY_Device_FriendlyName. CsWin32 does not project this one, so it is spelled out — it is a
     /// documented, fixed property key.
     /// </summary>
-    private static readonly PROPERTYKEY DeviceFriendlyNameKey = new()
+    private static readonly Interop.PropertyKey DeviceFriendlyNameKey = new()
     {
         fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"),
         pid = 14,
@@ -50,7 +51,7 @@ public static class AudioDeviceEnumerator
             string? defaultId = null;
             try
             {
-                enumerator.GetDefaultAudioEndpoint(flow, ERole.eConsole, out var defaultDevice);
+                enumerator.GetDefaultAudioEndpoint((Interop.EDataFlow)flow, Interop.ERole.eConsole, out var defaultDevice);
                 defaultId = GetId(defaultDevice);
             }
             catch (Exception ex)
@@ -58,7 +59,7 @@ public static class AudioDeviceEnumerator
                 Log.Warn($"No default {flow} endpoint: {ex.Message}");
             }
 
-            enumerator.EnumAudioEndpoints(flow, DEVICE_STATE.DEVICE_STATE_ACTIVE, out var collection);
+            enumerator.EnumAudioEndpoints((Interop.EDataFlow)flow, Interop.DeviceState.Active, out var collection);
             collection.GetCount(out var count);
 
             for (uint i = 0; i < count; i++)
@@ -82,7 +83,7 @@ public static class AudioDeviceEnumerator
     /// <summary>Opens the default playback device in loopback mode — i.e. "everything you hear".</summary>
     public static WasapiCaptureSource CreateDefaultRenderLoopback(string name = "Desktop")
     {
-        CreateEnumerator().GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, out var device);
+        CreateEnumerator().GetDefaultAudioEndpoint(Interop.EDataFlow.eRender, Interop.ERole.eConsole, out var device);
         return new WasapiCaptureSource(device, loopback: true, name);
     }
 
@@ -91,7 +92,7 @@ public static class AudioDeviceEnumerator
     {
         // eCommunications, not eConsole: Windows tracks a separate "the one you talk into" default,
         // and that is the one a user means by "my mic".
-        CreateEnumerator().GetDefaultAudioEndpoint(EDataFlow.eCapture, ERole.eCommunications, out var device);
+        CreateEnumerator().GetDefaultAudioEndpoint(Interop.EDataFlow.eCapture, Interop.ERole.eCommunications, out var device);
         return new WasapiCaptureSource(device, loopback: false, name);
     }
 
@@ -102,41 +103,52 @@ public static class AudioDeviceEnumerator
         return new WasapiCaptureSource(device, loopback, name);
     }
 
+    [LibraryImport("ole32.dll")]
+    private static partial int CoCreateInstance(in Guid rclsid, nint pUnkOuter, uint dwClsContext, in Guid riid, out nint ppv);
+
     /// <summary>Internal so <see cref="DefaultDeviceWatcher"/> can register for endpoint notifications on the same enumerator type.</summary>
-    internal static IMMDeviceEnumerator CreateEnumerator() =>
-        (IMMDeviceEnumerator)new MMDeviceEnumerator();
-
-    /// <summary>Opens the session manager for the default playback device, for session enumeration.</summary>
-    internal static unsafe IAudioSessionManager2 OpenDefaultRenderSessionManager()
+    internal static Interop.IMMDeviceEnumerator CreateEnumerator()
     {
-        CreateEnumerator().GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, out var device);
-
-        var iid = typeof(IAudioSessionManager2).GUID;
-        device.Activate(&iid, CLSCTX.CLSCTX_ALL, null, out var manager);
-        return (IAudioSessionManager2)manager;
+        // Classic COM interop's coclass-activation trick (`new MMDeviceEnumerator()`) implicitly
+        // calls CoCreateInstance under the hood — a built-in-COM-interop feature Native AOT does not
+        // support, so it is done explicitly here instead.
+        var iid = typeof(Interop.IMMDeviceEnumerator).GUID;
+        Marshal.ThrowExceptionForHR(
+            CoCreateInstance(ClsidMMDeviceEnumerator, 0, ClsctxInprocServer, iid, out var ptr));
+        return Interop.ComInterop.WrapAndRelease<Interop.IMMDeviceEnumerator>(ptr);
     }
 
-    private static unsafe string GetId(IMMDevice device)
+    /// <summary>Opens the session manager for the default playback device, for session enumeration.</summary>
+    internal static Interop.IAudioSessionManager2 OpenDefaultRenderSessionManager()
     {
-        Windows.Win32.Foundation.PWSTR id = default;
-        device.GetId(&id);
+        CreateEnumerator().GetDefaultAudioEndpoint(Interop.EDataFlow.eRender, Interop.ERole.eConsole, out var device);
+
+        var iid = typeof(Interop.IAudioSessionManager2).GUID;
+        device.Activate(iid, Interop.Clsctx.All, 0, out var ptr);
+        return Interop.ComInterop.WrapAndRelease<Interop.IAudioSessionManager2>(ptr);
+    }
+
+    private static unsafe string GetId(Interop.IMMDevice device)
+    {
+        device.GetId(out var idPtr);
         try
         {
-            return id.ToString();
+            return Marshal.PtrToStringUni(idPtr) ?? "";
         }
         finally
         {
-            PInvoke.CoTaskMemFree(id.Value);
+            PInvoke.CoTaskMemFree((void*)idPtr);
         }
     }
 
-    private static unsafe string GetFriendlyName(IMMDevice device)
+    private static unsafe string GetFriendlyName(Interop.IMMDevice device)
     {
         try
         {
-            device.OpenPropertyStore(STGM.STGM_READ, out var store);
-            store.GetValue(DeviceFriendlyNameKey, out var value);
+            device.OpenPropertyStore(Interop.Stgm.Read, out var store);
+            store.GetValue(DeviceFriendlyNameKey, out var rawValue);
 
+            ref var value = ref System.Runtime.CompilerServices.Unsafe.As<Interop.PropVariant, Windows.Win32.System.Com.StructuredStorage.PROPVARIANT>(ref rawValue);
             try
             {
                 var name = value.Anonymous.Anonymous.Anonymous.pwszVal.ToString();

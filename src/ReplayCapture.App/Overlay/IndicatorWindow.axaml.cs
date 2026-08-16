@@ -1,8 +1,10 @@
-using System.Windows;
-using System.Windows.Interop;
-using System.Windows.Media;
-using System.Windows.Media.Animation;
-using System.Windows.Threading;
+using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
+using Avalonia.Controls;
+using Avalonia.Media;
+using Avalonia.Styling;
+using Avalonia.Threading;
 using ReplayCapture.Core.Config;
 using ReplayCapture.Core.Diagnostics;
 using Windows.Win32;
@@ -21,22 +23,18 @@ namespace ReplayCapture.App.Overlay;
 /// </summary>
 public partial class IndicatorWindow : Window
 {
-    private static readonly Brush ArmedBrush = new SolidColorBrush(Color.FromRgb(0xE5, 0x48, 0x4D));
-    private static readonly Brush IdleBrush = new SolidColorBrush(Color.FromRgb(0x8A, 0x8F, 0x98));
-    private static readonly Brush SavedBrush = new SolidColorBrush(Color.FromRgb(0x46, 0xA7, 0x58));
+    private static readonly IBrush ArmedBrush = new SolidColorBrush(Color.FromRgb(0xE5, 0x48, 0x4D));
+    private static readonly IBrush IdleBrush = new SolidColorBrush(Color.FromRgb(0x8A, 0x8F, 0x98));
+    private static readonly IBrush SavedBrush = new SolidColorBrush(Color.FromRgb(0x46, 0xA7, 0x58));
 
     private readonly DispatcherTimer _revert;
     private OverlayCorner _corner = OverlayCorner.TopRight;
     private string _restingText = "REC";
-    private Brush _restingBrush = ArmedBrush;
+    private IBrush _restingBrush = ArmedBrush;
 
     public IndicatorWindow()
     {
         InitializeComponent();
-
-        ArmedBrush.Freeze();
-        IdleBrush.Freeze();
-        SavedBrush.Freeze();
 
         _revert = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
         _revert.Tick += (_, _) =>
@@ -46,13 +44,13 @@ public partial class IndicatorWindow : Window
             Label.Text = _restingText;
         };
 
-        SourceInitialized += OnSourceInitialized;
+        Opened += OnOpened;
         SizeChanged += (_, _) => Reposition();
     }
 
-    private void OnSourceInitialized(object? sender, EventArgs e)
+    private void OnOpened(object? sender, EventArgs e)
     {
-        var handle = new HWND(new WindowInteropHelper(this).Handle);
+        var handle = new HWND(TopLevel.GetTopLevel(this)!.TryGetPlatformHandle()!.Handle);
 
         // Click-through and never focusable, so it cannot steal input from a fullscreen game.
         const int GwlExstyle = -20;
@@ -73,16 +71,21 @@ public partial class IndicatorWindow : Window
 
     private void Reposition()
     {
-        var area = SystemParameters.WorkArea;
+        // Matches the WPF version's SystemParameters.WorkArea, which is likewise always the primary
+        // monitor's work area regardless of which monitor the indicator ends up on.
+        var area = Screens.Primary!.WorkingArea;
         const double margin = 16;
+        var scaling = Screens.Primary!.Scaling;
 
-        Left = _corner is OverlayCorner.TopLeft or OverlayCorner.BottomLeft
-            ? area.Left + margin
-            : area.Right - ActualWidth - margin;
+        var left = _corner is OverlayCorner.TopLeft or OverlayCorner.BottomLeft
+            ? area.X / scaling + margin
+            : area.X / scaling + area.Width / scaling - Bounds.Width - margin;
 
-        Top = _corner is OverlayCorner.TopLeft or OverlayCorner.TopRight
-            ? area.Top + margin
-            : area.Bottom - ActualHeight - margin;
+        var top = _corner is OverlayCorner.TopLeft or OverlayCorner.TopRight
+            ? area.Y / scaling + margin
+            : area.Y / scaling + area.Height / scaling - Bounds.Height - margin;
+
+        Position = new PixelPoint((int)left, (int)top);
     }
 
     public void Apply(OverlayCorner corner)
@@ -118,12 +121,20 @@ public partial class IndicatorWindow : Window
         Dot.Fill = SavedBrush;
         Label.Text = message;
 
-        var pulse = new DoubleAnimation(0.45, 1.0, TimeSpan.FromMilliseconds(220))
+        var pulse = new Animation
         {
-            AutoReverse = true,
-            RepeatBehavior = new RepeatBehavior(2),
+            Duration = TimeSpan.FromMilliseconds(220),
+            IterationCount = new IterationCount(4),
+            PlaybackDirection = PlaybackDirection.Alternate,
+            Easing = new LinearEasing(),
+            Children =
+            {
+                new KeyFrame { Cue = new Cue(0), Setters = { new Setter(OpacityProperty, 0.45) } },
+                new KeyFrame { Cue = new Cue(1), Setters = { new Setter(OpacityProperty, 1.0) } },
+            },
         };
-        Root.BeginAnimation(OpacityProperty, pulse);
+
+        _ = pulse.RunAsync(Root);
 
         _revert.Stop();
         _revert.Start();

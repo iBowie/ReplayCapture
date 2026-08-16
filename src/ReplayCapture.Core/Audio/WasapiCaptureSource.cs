@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices;
+using ReplayCapture.Core.Audio.Interop;
 using ReplayCapture.Core.Diagnostics;
 using Sdcb.FFmpeg.Raw;
 using Windows.Win32.Media.Audio;
-using Windows.Win32.System.Com;
 
 namespace ReplayCapture.Core.Audio;
 
@@ -68,13 +68,13 @@ public sealed unsafe class WasapiCaptureSource : IAudioSource
         IsLoopback = loopback;
 
         var audioClientIid = typeof(IAudioClient).GUID;
-        device.Activate(&audioClientIid, CLSCTX.CLSCTX_ALL, null, out var clientObject);
-        var client = (IAudioClient)clientObject;
+        device.Activate(audioClientIid, Clsctx.All, 0, out var clientPtr);
+        var client = ComInterop.WrapAndRelease<IAudioClient>(clientPtr);
 
         // Shared mode has no format of its own — the endpoint's mix format is what it will give us,
         // and asking for anything else fails rather than converting.
-        WAVEFORMATEX* mixFormat;
-        client.GetMixFormat(&mixFormat);
+        client.GetMixFormat(out var mixFormatPtr);
+        var mixFormat = (WAVEFORMATEX*)mixFormatPtr;
 
         AudioResampler resampler;
         try
@@ -84,11 +84,11 @@ public sealed unsafe class WasapiCaptureSource : IAudioSource
             var inputFormat = DescribeFormat(mixFormat);
 
             client.Initialize(
-                AUDCLNT_SHAREMODE.AUDCLNT_SHAREMODE_SHARED,
+                AudclntSharemode.Shared,
                 loopback ? Constants.StreamflagsLoopback : 0u,
                 BufferDurationTicks,
                 0,
-                mixFormat,
+                (nint)mixFormat,
                 null);
 
             resampler = new AudioResampler(inputSampleRate, inputChannels, inputFormat);
@@ -102,10 +102,10 @@ public sealed unsafe class WasapiCaptureSource : IAudioSource
         }
 
         var captureIid = typeof(IAudioCaptureClient).GUID;
-        client.GetService(&captureIid, out var captureObject);
+        client.GetService(captureIid, out var capturePtr);
 
         _loop = new WasapiCaptureLoop(
-            client, (IAudioCaptureClient)captureObject, resampler, name,
+            client, ComInterop.WrapAndRelease<IAudioCaptureClient>(capturePtr), resampler, name,
             (qpc, samples) => SamplesReady?.Invoke(qpc, samples));
 
         // Loopback only: keeps the shared audio engine from idling between sounds, which is what

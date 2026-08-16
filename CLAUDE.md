@@ -24,9 +24,11 @@ Run a single test class or method with the standard xUnit filter:
 dotnet test S:\_replayCapture\ReplayCapture.slnx --filter "FullyQualifiedName~PacketRingBufferTests"
 ```
 
-The app is tray-only (no main window). After any XAML/binding change, run the UI self-test — WPF
-defers binding/template errors to runtime, so a bad `MultiBinding` or template compiles clean and
-only fails when a control is first realized:
+The app is tray-only (no main window). After any XAML/binding change, run the UI self-test.
+`ReplayCapture.App` uses Avalonia with compiled bindings (`AvaloniaUseCompiledBindingsByDefault`) —
+these catch a missing/typo'd binding path at build time instead of failing at runtime, but a control
+with no matching `x:DataType` in scope, a missing resource, or a template-realization bug still only
+surfaces when a window is actually opened:
 
 ```bash
 ReplayCapture.exe --selftest
@@ -40,12 +42,13 @@ live audio session would be assigned to — the fast way to check a config chang
 display — per-display frame accuracy/late-tick/drift diagnostics), `rcprobe rebuild` (exercises the
 resolution-change recovery path).
 
-`Directory.Build.props` fixes `InvariantGlobalization=false` for every project — never turn this on;
-see the comment there and the README's bug writeup for why it takes down WPF's binding engine.
+`Directory.Build.props` sets `InvariantGlobalization=false` for every project. This was originally
+forced off by a WPF-specific bug (see the README's bug writeup); WPF is gone now, so this is an open
+candidate to flip to `true`, but do so as a deliberate, tested change — see the comment there.
 
 ## Architecture
 
-**`ReplayCapture.Core`** (the pipeline, UI-agnostic) → **`ReplayCapture.App`** (WPF tray shell) →
+**`ReplayCapture.Core`** (the pipeline, UI-agnostic) → **`ReplayCapture.App`** (Avalonia tray shell) →
 **`ReplayCapture.Probe`** (CLI harness, same Core, no UI) → **`ReplayCapture.Tests`** (xUnit against
 Core; internals are exposed via `InternalsVisibleTo` since the process/track rules engine is
 internal but is exactly the logic worth testing).
@@ -85,7 +88,7 @@ internal but is exactly the logic worth testing).
 
 ### App shell
 
-`App.xaml.cs` is the composition root: builds `ReplaySession` off the UI thread (`StartSession`),
+`App.axaml.cs` is the composition root: builds `ReplaySession` off the UI thread (`StartSession`),
 wires `TrayController` (menu, notifications, armed/saving state), `GlobalHotkeyService` (elevated
 `RegisterHotKey`, since UIPI drops hotkeys and low-level keyboard hooks while a higher-integrity
 window has focus — this is why the app requires admin, see README), `IndicatorWindow` (the
@@ -96,6 +99,23 @@ context menu and exits non-zero on failure. Config changes only restart the pipe
 (`RestartSession`) when they change its shape (buffer size, memory cap, display list, audio track
 list); everything else (hotkey, indicator, startup toggle) applies live so the buffer isn't emptied
 needlessly.
+
+Avalonia has no HWND-based tray icon or global-hotkey primitive (neither concept exists outside
+Win32), so both are hand-rolled: `Native/MessageOnlyWindow` wraps a message-only (`HWND_MESSAGE`)
+window — real, message-pumped, never visible — that `GlobalHotkeyService` uses for `WM_HOTKEY` and
+`TrayController` uses for its `Shell_NotifyIcon` callback message and native popup menu
+(`CreatePopupMenu`/`TrackPopupMenuEx`). `TrayController` talks to `Shell_NotifyIcon` directly rather
+than through a wrapper package: no Avalonia tray library (Avalonia's own built-in `TrayIcon` control
+included) exposes balloon/toast notifications, and `Notify()` is load-bearing UX, not decoration.
+`SettingsWindow` is non-modal (`Show()`, not `ShowDialog()`) since the app has no owner window to
+block against — it surfaces its result via `Saved`/`Cancelled` events instead of `DialogResult`.
+`SettingsWindow.axaml` uses Avalonia's compiled bindings (`x:DataType` set at the window root and at
+every point `DataContext` changes type) rather than classic reflection-based `{Binding}` — under a
+Native AOT publish, the trimmer strips ViewModel property accessors it has no static evidence are
+used, and classic bindings resolve to nothing silently (found the hard way: every field in Settings
+rendered blank under the AOT build until this was fixed). `publish_avalonia.bat` publishes a
+self-contained Native AOT build; it locates `vswhere.exe`/`link.exe` itself since neither is on PATH
+outside a Developer Command Prompt, which the AOT native-linking step otherwise needs.
 
 Recovery is triggered from two places: `ReplaySession.RecoveryRequired` (GPU loss, capture-surface
 closed, display topology changed) and `SystemEvents.PowerModeChanged` on resume-from-sleep (WASAPI
