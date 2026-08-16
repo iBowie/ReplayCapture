@@ -74,6 +74,14 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource
     // needs no lock of its own.
     private byte[]? _cursorShapeBuffer;
 
+    // Last known pointer state. Desktop Duplication only guarantees PointerPosition is valid on the
+    // frame where LastMouseUpdateTime is nonzero; on a frame delivered purely by a desktop content
+    // change (the common case once the cursor stops moving), Visible comes back false instead of the
+    // real "still there, just not moving" state, so it must be cached rather than read fresh.
+    private bool _cursorVisible;
+    private int _cursorLeft;
+    private int _cursorTop;
+
     public DisplayInfo Display { get; }
 
     /// <summary>
@@ -242,10 +250,13 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource
         using var source = desktopResource.QueryInterface<ID3D11Texture2D>();
 
         UpdateCursorShapeIfChanged(frameInfo);
-        var cursorVisible = frameInfo.PointerPosition.Visible;
-        // PointerPosition is in virtual-desktop coordinates; translate to this output's own space.
-        var cursorLeft = frameInfo.PointerPosition.Position.X - Display.Left;
-        var cursorTop = frameInfo.PointerPosition.Position.Y - Display.Top;
+        if (frameInfo.LastMouseUpdateTime != 0)
+        {
+            _cursorVisible = frameInfo.PointerPosition.Visible;
+            // PointerPosition is in virtual-desktop coordinates; translate to this output's own space.
+            _cursorLeft = frameInfo.PointerPosition.Position.X - Display.Left;
+            _cursorTop = frameInfo.PointerPosition.Position.Y - Display.Top;
+        }
 
         // Written outside _latchGate: only this thread ever writes a latch buffer's contents, and it
         // never writes the one currently published as _latchReadIndex (see the class remarks), so
@@ -254,8 +265,8 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource
         var writeBuffer = EnsureLatch(writeIndex, source);
         _d3d.ImmediateContext.CopyResource(writeBuffer, source);
 
-        if (cursorVisible)
-            _cursorOverlay.Draw(_d3d.ImmediateContext, writeBuffer, ContentSize.Width, ContentSize.Height, cursorLeft, cursorTop);
+        if (_cursorVisible)
+            _cursorOverlay.Draw(_d3d.ImmediateContext, writeBuffer, ContentSize.Width, ContentSize.Height, _cursorLeft, _cursorTop);
 
         lock (_latchGate)
         {

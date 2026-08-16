@@ -41,13 +41,15 @@ if not exist "%MSVC_BIN%\link.exe" (
 
 set "PATH=%PATH%;%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%MSVC_BIN%"
 
+set "OUT_DIR=%REPO_ROOT%publish"
+
 echo Publishing ReplayCapture.App as Native AOT (win-x64, Release)...
-dotnet publish "%PROJECT%" -r win-x64 -c Release -p:PublishAot=true -p:SelfContained=true
+dotnet publish "%PROJECT%" -r win-x64 -c Release -p:PublishAot=true -p:SelfContained=true -o "%OUT_DIR%"
 if errorlevel 1 (
     echo Publish failed.
     exit /b 1
 )
 
 echo.
-echo Published to: src\ReplayCapture.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish\
+echo Published to: %OUT_DIR%\
 endlocal
