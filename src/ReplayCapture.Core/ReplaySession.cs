@@ -74,7 +74,7 @@ public sealed class ReplaySession : IDisposable
                                 ?? new DisplayConfig { DeviceName = display.DeviceName };
 
             _recorders.Add(new DisplayRecorder(
-                _d3d, display, displayConfig, config.BufferSeconds, perDisplayBytes, config.CaptureBackend));
+                _d3d, display, displayConfig, config.BufferSeconds, perDisplayBytes, config.CaptureBackend, config.VideoEncoderBackend));
         }
 
         _audio = new AudioEngine(config, EpochQpc);

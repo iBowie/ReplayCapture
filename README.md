@@ -11,7 +11,7 @@ and an arbitrary number of separate audio stems.
 | Stack | C# on `net10.0-windows10.0.26100.0`, x64 only |
 | Capture | Selectable per `AppConfig.CaptureBackend` — DXGI Desktop Duplication (default) or Windows.Graphics.Capture, one session per display either way |
 | Colour convert | `ID3D11VideoProcessor` (fixed-function BGRA→NV12, BT.709 limited range) |
-| Encode | NVENC `h264_nvenc` via Sdcb.FFmpeg, sharing the capture `ID3D11Device` |
+| Encode | Selectable per `AppConfig.VideoEncoderBackend` — NVENC `h264_nvenc` (default), AMD AMF `h264_amf`, or software `libx264`, all via Sdcb.FFmpeg; the two hardware backends share the capture `ID3D11Device` |
 | Container | **`.mov`**, one file per display, each carrying every audio track |
 | Audio | Uncompressed PCM s16le, one track per stem |
 
@@ -133,7 +133,10 @@ it to — the fastest way to check a config change did what you meant, without s
 
 `rcprobe capture 3 [dxgi|wgc]` exercises one capture backend and the NV12 converter without touching
 the encoder, which is where to start if frames stop arriving. `rcprobe record` and `rcprobe capture`
-both default to `dxgi`; pass `wgc` to exercise the other backend.
+both default to `dxgi`; pass `wgc` to exercise the other backend. `rcprobe record [secs] [outDir]
+[dxgi|wgc] [nvenc|amf|x264]` also takes an encoder backend as its fourth argument, defaulting to
+`nvenc` — the fast way to check AMF or x264 actually opens and produces a playable file on a given
+machine before flipping the setting in the tray app.
 
 ### Capture backend: DXGI Desktop Duplication vs Windows.Graphics.Capture
 
@@ -159,10 +162,42 @@ dashboard, a stream overlay) is the case where the trade actually pays off, sinc
 never becomes visible on content that rarely changes and isn't refreshing above 50 fps anyway.
 Changing it restarts the capture pipeline, like changing the display list or buffer length.
 
+### Video encoder backend: NVENC vs AMD AMF vs software x264
+
+`AppConfig.VideoEncoderBackend` picks which engine every display's `DisplayRecorder` encodes
+through — `NvencVideoEncoder` and `AmfVideoEncoder` (both `GpuVideoEncoderBase` subclasses) or
+`X264VideoEncoder` (its own `VideoEncoderBase` subclass), all behind `IVideoEncoder` and selected by
+`VideoEncoderFactory`. Like capture backend, it's one setting for every display, not per-display —
+which encoders are even available is a whole-machine GPU-vendor fact.
+
+NVENC and AMF are both fully GPU-resident: FFmpeg's `h264_nvenc` and `h264_amf` each consume a
+D3D11VA hardware frames context directly, so `GpuVideoEncoderBase` owns one shared hw device/frame
+pool and feeds it through the same `Nv12Converter` blit NVENC always used — the captured texture
+never leaves the GPU either way, and the two subclasses differ only in codec name and private
+options (NVENC: `preset=p4 tune=ll rc=cbr profile=high delay=0`; AMF: `usage=lowlatency
+quality=speed rc=cbr profile=high`).
+
+x264 cannot take a hardware frame at all. `X264VideoEncoder` still does the BGRA→NV12 colour
+convert on the GPU via `Nv12Converter` (free, dedicated silicon), but then has to `CopyResource`
+that NV12 texture into a staging texture, `Map` it, and copy each row into a system-memory `AVFrame`
+before `libx264` can see it — a GPU→CPU round-trip and a CPU-side encode neither hardware backend
+pays. It runs `preset=ultrafast tune=zerolatency`, the least-quality/most-speed corner of x264's
+tuning space, because there is no lookahead or multi-pass budget available in a pipeline that has to
+keep up with the display's live frame rate.
+
+All three set `AV_CODEC_FLAG_GLOBAL_HEADER`, which is what keeps `MovWriter` encoder-agnostic: NVENC
+and AMF emit avcC (length-prefixed) extradata and packets with it as a matter of course, and FFmpeg's
+`libx264` wrapper specifically switches x264 out of Annex-B mode into avcC mode when the flag is set
+— so nothing downstream needs per-encoder bitstream filtering.
+
 ### Verified on this machine
 
 - FFmpeg runtime `n7.1-58-g10aaf84f85` ships `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`, `pcm_s16le`,
-  the `d3d11va` hwdevice and the `mov` muxer.
+  the `d3d11va` hwdevice and the `mov` muxer. It also has `--enable-amf` and `--enable-gpl` in its
+  build configuration, and `h264_amf`/`hevc_amf`/`libx264` all show up as registered encoder names in
+  `avcodec-61.dll` — but this dev machine has no AMD GPU, so **`h264_amf` opening a real encode
+  session, and `libx264`'s CBR/VBV tuning, are unverified beyond a successful build and unit tests**.
+  Run `rcprobe record 5 <dir> dxgi amf` / `... dxgi x264` before relying on either in production.
 - An `h264_nvenc` encode session opens successfully on the RTX 5070.
 - CsWin32 has full metadata for the per-process loopback surface
   (`ActivateAudioInterfaceAsync`, `AUDIOCLIENT_ACTIVATION_PARAMS`,

@@ -25,7 +25,8 @@ switch (command)
         Record(
             args.Length > 1 ? int.Parse(args[1]) : 10,
             args.Length > 2 ? args[2] : @"S:\_replayCapture\out",
-            args.Length > 3 ? ParseBackend(args[3]) : ReplayCapture.Core.Config.CaptureBackend.Dxgi);
+            args.Length > 3 ? ParseBackend(args[3]) : ReplayCapture.Core.Config.CaptureBackend.Dxgi,
+            args.Length > 4 ? ParseEncoder(args[4]) : ReplayCapture.Core.Config.VideoEncoderBackend.Nvenc);
         break;
 
     case "audio":
@@ -57,7 +58,7 @@ switch (command)
               sessions          Show processes holding audio sessions and the track each maps to
               capture [secs] [dxgi|wgc]
                                 Capture the primary display and convert frames to NV12
-              record [secs] [outDir] [dxgi|wgc]
+              record [secs] [outDir] [dxgi|wgc] [nvenc|amf|x264]
                                 Run the full pipeline and write one .mov per display
               bench [secs]      Measure the always-on overhead against an idle baseline
               benchreal [secs]  Same, but against the actual saved config.json and every display
@@ -71,6 +72,14 @@ static ReplayCapture.Core.Config.CaptureBackend ParseBackend(string arg) => arg.
     "wgc" => ReplayCapture.Core.Config.CaptureBackend.Wgc,
     "dxgi" => ReplayCapture.Core.Config.CaptureBackend.Dxgi,
     _ => throw new ArgumentException($"Unknown capture backend '{arg}'; expected 'dxgi' or 'wgc'."),
+};
+
+static ReplayCapture.Core.Config.VideoEncoderBackend ParseEncoder(string arg) => arg.ToLowerInvariant() switch
+{
+    "nvenc" => ReplayCapture.Core.Config.VideoEncoderBackend.Nvenc,
+    "amf" => ReplayCapture.Core.Config.VideoEncoderBackend.Amf,
+    "x264" => ReplayCapture.Core.Config.VideoEncoderBackend.X264,
+    _ => throw new ArgumentException($"Unknown video encoder '{arg}'; expected 'nvenc', 'amf' or 'x264'."),
 };
 
 // Scaffolding aid: prints the shape of Vortice's video-processor surface so the converter can be
@@ -109,13 +118,16 @@ static void DumpApi(string filter)
 
 // The whole pipeline in one command: capture -> pace -> NVENC -> ring, plus every audio track,
 // written out as one .mov per display.
-static void Record(int seconds, string outputDirectory, ReplayCapture.Core.Config.CaptureBackend backend)
+static void Record(
+    int seconds, string outputDirectory,
+    ReplayCapture.Core.Config.CaptureBackend backend, ReplayCapture.Core.Config.VideoEncoderBackend encoder)
 {
     var config = new ReplayCapture.Core.Config.AppConfig
     {
         BufferSeconds = seconds,
         OutputDirectory = outputDirectory,
         CaptureBackend = backend,
+        VideoEncoderBackend = encoder,
     };
 
     using var session = new ReplayCapture.Core.ReplaySession(config);

@@ -24,9 +24,10 @@ public sealed class DisplayRecorder : IDisposable
     private readonly PacketRingBuffer _ring;
     private readonly FramePacer _pacer;
     private readonly DisplayConfig _config;
+    private readonly VideoEncoderBackend _videoEncoderBackend;
     private readonly Lock _encoderGate = new();
 
-    private NvencVideoEncoder _encoder;
+    private IVideoEncoder _encoder;
 
     /// <summary>Set when the display changed size; the pacer rebuilds the encoder on its next tick.</summary>
     private volatile bool _rebuildRequested;
@@ -62,10 +63,11 @@ public sealed class DisplayRecorder : IDisposable
 
     public DisplayRecorder(
         D3DContext d3d, DisplayInfo display, DisplayConfig config, int bufferSeconds, long memoryLimitBytes,
-        CaptureBackend captureBackend = CaptureBackend.Dxgi)
+        CaptureBackend captureBackend = CaptureBackend.Dxgi, VideoEncoderBackend videoEncoderBackend = VideoEncoderBackend.Nvenc)
     {
         _d3d = d3d;
         _config = config;
+        _videoEncoderBackend = videoEncoderBackend;
         Display = display;
         FramesPerSecond = config.Fps ?? display.RefreshHz;
 
@@ -74,7 +76,7 @@ public sealed class DisplayRecorder : IDisposable
 
         var size = _capture.ContentSize;
 
-        _encoder = new NvencVideoEncoder(d3d, size.Width, size.Height, FramesPerSecond, config.BitrateMbps);
+        _encoder = VideoEncoderFactory.Create(videoEncoderBackend, d3d, size.Width, size.Height, FramesPerSecond, config.BitrateMbps);
         _ring = new PacketRingBuffer(bufferSeconds, memoryLimitBytes);
         _encoder.PacketReady += OnPacketReady;
 
@@ -118,8 +120,8 @@ public sealed class DisplayRecorder : IDisposable
                 _encoder.PacketReady -= OnPacketReady;
                 _encoder.Dispose();
 
-                _encoder = new NvencVideoEncoder(
-                    _d3d, size.Width, size.Height, FramesPerSecond, _config.BitrateMbps);
+                _encoder = VideoEncoderFactory.Create(
+                    _videoEncoderBackend, _d3d, size.Width, size.Height, FramesPerSecond, _config.BitrateMbps);
                 _encoder.PacketReady += OnPacketReady;
 
                 _ring.Clear();

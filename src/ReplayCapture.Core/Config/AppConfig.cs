@@ -30,6 +30,9 @@ public sealed record AppConfig
     /// <summary>Which native API captures each display's frames. See <see cref="CaptureBackend"/>.</summary>
     public CaptureBackend CaptureBackend { get; init; } = CaptureBackend.Dxgi;
 
+    /// <summary>Which engine encodes every display's H.264 stream. See <see cref="VideoEncoderBackend"/>.</summary>
+    public VideoEncoderBackend VideoEncoderBackend { get; init; } = VideoEncoderBackend.Nvenc;
+
     public IReadOnlyList<DisplayConfig> Displays { get; init; } = [];
 
     public IReadOnlyList<AudioTrackConfig> AudioTracks { get; init; } = DefaultAudioTracks;
@@ -127,6 +130,36 @@ public enum CaptureBackend
 {
     Dxgi,
     Wgc,
+}
+
+/// <summary>
+/// Which encode engine <see cref="Encoders.VideoEncoderFactory"/> uses for every display. Applies
+/// globally, not per display — the available encode engines are a whole-machine GPU-vendor fact,
+/// not something that varies sensibly between two monitors on the same box.
+/// <para>
+/// <b><see cref="Nvenc"/></b> (the default) — NVIDIA NVENC via FFmpeg's <c>h264_nvenc</c>. Fully
+/// GPU-resident: the captured texture is colour-converted straight into an NVENC input surface with
+/// no CPU round-trip. Requires an NVIDIA GPU with a hardware encoder.
+/// </para>
+/// <para>
+/// <b><see cref="Amf"/></b> — AMD's Advanced Media Framework via FFmpeg's <c>h264_amf</c>. The same
+/// fully GPU-resident path as NVENC: AMF also consumes a D3D11 hardware frames context directly, so
+/// the frame never leaves the GPU. Requires an AMD GPU with a hardware H.264 encoder (VCE).
+/// </para>
+/// <para>
+/// <b><see cref="X264"/></b> — software encoding via FFmpeg's <c>libx264</c>, for machines with
+/// neither an NVENC nor an AMF encoder available, or where the hardware encoder is already committed
+/// elsewhere (e.g. a separate streaming pipeline). Unlike the two hardware paths, every captured
+/// frame has to be read back from the GPU into system memory before x264 can see it — a PCIe
+/// round-trip and a CPU-side encode that the hardware paths never pay — so expect materially higher
+/// CPU usage and, on a loaded system, a lower sustainable frame rate.
+/// </para>
+/// </summary>
+public enum VideoEncoderBackend
+{
+    Nvenc,
+    Amf,
+    X264,
 }
 
 public sealed record DisplayConfig

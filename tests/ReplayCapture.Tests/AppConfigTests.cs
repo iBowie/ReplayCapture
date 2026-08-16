@@ -124,6 +124,23 @@ public class AppConfigTests
     }
 
     [Fact]
+    public void Video_encoder_backend_defaults_to_nvenc()
+    {
+        Assert.Equal(VideoEncoderBackend.Nvenc, new AppConfig().VideoEncoderBackend);
+    }
+
+    [Fact]
+    public void Video_encoder_backend_round_trips_through_json()
+    {
+        var config = new AppConfig { VideoEncoderBackend = VideoEncoderBackend.X264 };
+
+        var restored = JsonSerializer.Deserialize<AppConfig>(
+            JsonSerializer.Serialize(config, Options), Options)!;
+
+        Assert.Equal(VideoEncoderBackend.X264, restored.VideoEncoderBackend);
+    }
+
+    [Fact]
     public void Process_groups_round_trip_through_json()
     {
         var config = new AppConfig

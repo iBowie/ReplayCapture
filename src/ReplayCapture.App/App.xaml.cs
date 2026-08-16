@@ -329,6 +329,7 @@ public partial class App : Application
             previous.BufferSeconds != updated.BufferSeconds
             || previous.MaxRingMemoryMegabytes != updated.MaxRingMemoryMegabytes
             || previous.CaptureBackend != updated.CaptureBackend
+            || previous.VideoEncoderBackend != updated.VideoEncoderBackend
             || !previous.Displays.SequenceEqual(updated.Displays)
             || !previous.AudioTracks.SequenceEqual(updated.AudioTracks);
 
