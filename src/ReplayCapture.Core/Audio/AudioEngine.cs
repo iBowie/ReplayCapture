@@ -2,6 +2,7 @@ using ReplayCapture.Core.Config;
 using ReplayCapture.Core.Diagnostics;
 using ReplayCapture.Core.Muxing;
 using ReplayCapture.Core.Timing;
+using Windows.Win32.Media.Audio;
 
 namespace ReplayCapture.Core.Audio;
 
@@ -27,8 +28,17 @@ public sealed class AudioEngine : IDisposable
     private readonly List<AudioTrackBuffer> _tracks = [];
     private readonly List<IAudioSource> _sources = [];
     private readonly List<ProcessTrackBinding> _bindings = [];
+
+    // Keyed so one physical endpoint backs however many tracks reference it, and so a "default
+    // device" source can be found and reopened in place when the default changes underneath it.
+    private readonly Dictionary<string, IAudioSource> _sourcesByKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AudioSourceSpec> _sourceSpecsByKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<AudioTrackBuffer>> _sourceTargetsByKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _sourceLock = new();
+
     private readonly Timer _silenceAdvance;
     private readonly Timer _processPoll;
+    private readonly DefaultDeviceWatcher _deviceWatcher;
     private readonly int _windowSeconds;
     private bool _disposed;
 
@@ -51,13 +61,13 @@ public sealed class AudioEngine : IDisposable
 
         _processPoll = new Timer(_ => RefreshProcessBindings(), null,
             Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+
+        _deviceWatcher = new DefaultDeviceWatcher();
+        _deviceWatcher.DefaultDeviceChanged += OnDefaultDeviceChanged;
     }
 
     private void BuildTracks(AppConfig config)
     {
-        // Keyed so one physical endpoint backs however many tracks reference it.
-        var openSources = new Dictionary<string, IAudioSource>(StringComparer.OrdinalIgnoreCase);
-
         foreach (var trackConfig in config.AudioTracks.Where(t => t.Enabled))
         {
             var track = new AudioTrackBuffer(trackConfig.Name, EpochQpc, _windowSeconds, trackConfig.Gain);
@@ -73,21 +83,71 @@ public sealed class AudioEngine : IDisposable
             foreach (var spec in specs.Where(s => s.Kind is not AudioSourceKind.Process and not AudioSourceKind.Group))
             {
                 var key = $"{spec.Kind}:{spec.EndpointId ?? "default"}";
-                if (!openSources.TryGetValue(key, out var source))
+                if (!_sourcesByKey.TryGetValue(key, out var source))
                 {
                     source = TryOpenSource(spec, trackConfig.Name);
                     if (source is null) continue;
-                    openSources[key] = source;
+                    _sourcesByKey[key] = source;
+                    _sourceSpecsByKey[key] = spec;
+                    _sourceTargetsByKey[key] = [];
                     _sources.Add(source);
                 }
 
-                var target = track;
-                source.SamplesReady += (qpc, samples) => target.Accumulate(qpc, samples.Span);
+                _sourceTargetsByKey[key].Add(track);
+                Subscribe(source, track);
             }
         }
 
         Log.Info($"Audio engine: {_tracks.Count} track(s), {_sources.Count} endpoint source(s), " +
                  $"{_bindings.Count} process-rule track(s), {TotalBytes / (1024 * 1024)} MB of ring buffers.");
+    }
+
+    private static void Subscribe(IAudioSource source, AudioTrackBuffer target) =>
+        source.SamplesReady += (qpc, samples) => target.Accumulate(qpc, samples.Span);
+
+    /// <summary>
+    /// Reopens whichever cached source was resolved against "the default device" for the role that
+    /// just changed, so the tracks it feeds pick up the new default instead of quietly listening to
+    /// an endpoint that stopped receiving anything. See <see cref="DefaultDeviceWatcher"/>.
+    /// </summary>
+    private void OnDefaultDeviceChanged(EDataFlow flow)
+    {
+        var key = flow == EDataFlow.eRender ? "RenderLoopback:default" : "Capture:default";
+
+        lock (_sourceLock)
+        {
+            if (_disposed) return;
+            if (!_sourcesByKey.TryGetValue(key, out var oldSource)) return;
+
+            var spec = _sourceSpecsByKey[key];
+            var targets = _sourceTargetsByKey[key];
+
+            var newSource = TryOpenSource(spec, "default device change");
+            if (newSource is null)
+            {
+                Log.Warn($"Could not reopen '{key}' after a default device change; it keeps listening to the previous endpoint.");
+                return;
+            }
+
+            foreach (var target in targets) Subscribe(newSource, target);
+
+            try
+            {
+                newSource.Start();
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Could not start reopened audio source '{newSource.Name}'", ex);
+            }
+
+            _sourcesByKey[key] = newSource;
+            var index = _sources.IndexOf(oldSource);
+            if (index >= 0) _sources[index] = newSource;
+
+            oldSource.Dispose();
+
+            Log.Info($"Default {(flow == EDataFlow.eRender ? "playback" : "recording")} device changed; '{key}' reopened against it.");
+        }
     }
 
     private static IEnumerable<AudioSourceSpec> ParseSources(AudioTrackConfig track)
@@ -219,9 +279,14 @@ public sealed class AudioEngine : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        lock (_sourceLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
 
+        _deviceWatcher.DefaultDeviceChanged -= OnDefaultDeviceChanged;
+        _deviceWatcher.Dispose();
         _processPoll.Dispose();
         _silenceAdvance.Dispose();
         foreach (var binding in _bindings) binding.Dispose();

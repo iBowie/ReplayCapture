@@ -102,7 +102,8 @@ public static class AudioDeviceEnumerator
         return new WasapiCaptureSource(device, loopback, name);
     }
 
-    private static IMMDeviceEnumerator CreateEnumerator() =>
+    /// <summary>Internal so <see cref="DefaultDeviceWatcher"/> can register for endpoint notifications on the same enumerator type.</summary>
+    internal static IMMDeviceEnumerator CreateEnumerator() =>
         (IMMDeviceEnumerator)new MMDeviceEnumerator();
 
     /// <summary>Opens the session manager for the default playback device, for session enumeration.</summary>
