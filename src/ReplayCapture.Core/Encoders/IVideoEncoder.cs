@@ -1,15 +1,14 @@
-using D3DTexture2D = Vortice.Direct3D11.ID3D11Texture2D;
-
 namespace ReplayCapture.Core.Encoders;
 
 /// <summary>
-/// Encodes captured D3D11 textures into H.264. <see cref="DisplayRecorder"/> and
-/// <see cref="Muxing.MovWriter"/> talk to this contract rather than a concrete encoder, so which
-/// engine is actually running — NVENC, AMD AMF, or software x264, see
-/// <see cref="Config.VideoEncoderBackend"/> — is a construction-time choice, not something either
-/// of them needs to know about.
+/// Encodes captured frames into H.264. Generic over the captured frame's native handle type — a
+/// D3D11 texture for the Windows backends, a VAAPI surface for a future Linux backend.
+/// <see cref="DisplayRecorder{TFrame}"/> and <see cref="Muxing.MovWriter"/> talk to this contract
+/// rather than a concrete encoder, so which engine is actually running — NVENC, AMD AMF, or
+/// software x264, see <see cref="Config.VideoEncoderBackend"/> — is a construction-time choice, not
+/// something either of them needs to know about.
 /// </summary>
-public interface IVideoEncoder : IDisposable
+public interface IVideoEncoder<TFrame> : IDisposable
 {
     int Width { get; }
     int Height { get; }
@@ -34,7 +33,7 @@ public interface IVideoEncoder : IDisposable
     /// The pacer calls this on every tick, resubmitting the previous texture when the display has
     /// not changed.
     /// </summary>
-    void Encode(D3DTexture2D source, long frameIndex, long qpcTicks, bool forceKeyframe = false);
+    void Encode(TFrame source, long frameIndex, long qpcTicks, bool forceKeyframe = false);
 
     /// <summary>Pushes any frames the encoder is still holding. Called before writing a clip.</summary>
     void Flush();

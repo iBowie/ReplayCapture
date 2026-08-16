@@ -3,8 +3,11 @@ using ReplayCapture.Core.Buffering;
 using ReplayCapture.Core.Capture;
 using ReplayCapture.Core.Config;
 using ReplayCapture.Core.Diagnostics;
+using ReplayCapture.Core.Encoders;
 using ReplayCapture.Core.Muxing;
 using ReplayCapture.Core.Timing;
+
+using D3DTexture2D = Vortice.Direct3D11.ID3D11Texture2D;
 
 namespace ReplayCapture.Core;
 
@@ -25,7 +28,7 @@ public sealed class ReplaySession : IDisposable
     private static readonly TimeSpan WatchdogInterval = TimeSpan.FromSeconds(3);
 
     private readonly D3DContext _d3d;
-    private readonly List<DisplayRecorder> _recorders = [];
+    private readonly List<IDisplayRecorder> _recorders = [];
     private readonly AudioEngine _audio;
     private readonly object _saveGate = new();
     private readonly HashSet<string> _capturedDeviceNames;
@@ -42,7 +45,7 @@ public sealed class ReplaySession : IDisposable
     /// </summary>
     public event Action<string>? RecoveryRequired;
 
-    public IReadOnlyList<DisplayRecorder> Recorders => _recorders;
+    public IReadOnlyList<IDisplayRecorder> Recorders => _recorders;
     public AudioEngine Audio => _audio;
 
     /// <summary>Shared timeline origin for audio and video alike.</summary>
@@ -73,8 +76,16 @@ public sealed class ReplaySession : IDisposable
                                     string.Equals(d.DeviceName, display.DeviceName, StringComparison.OrdinalIgnoreCase))
                                 ?? new DisplayConfig { DeviceName = display.DeviceName };
 
-            _recorders.Add(new DisplayRecorder(
-                _d3d, display, displayConfig, config.BufferSeconds, perDisplayBytes, config.CaptureBackend, config.VideoEncoderBackend));
+            var framesPerSecond = displayConfig.Fps ?? display.RefreshHz;
+            var captureBackend = config.CaptureBackend;
+            var videoEncoderBackend = config.VideoEncoderBackend;
+            var bitrateMbps = displayConfig.BitrateMbps;
+
+            _recorders.Add(new DisplayRecorder<D3DTexture2D>(
+                display, framesPerSecond, config.BufferSeconds, perDisplayBytes,
+                captureFactory: () => DisplayCaptureSourceFactory.Create(captureBackend, _d3d, display),
+                encoderFactory: (width, height) =>
+                    VideoEncoderFactory.Create(videoEncoderBackend, _d3d, width, height, framesPerSecond, bitrateMbps)));
         }
 
         _audio = new AudioEngine(config, EpochQpc);
@@ -226,7 +237,7 @@ public sealed class ReplaySession : IDisposable
     }
 
     private SaveResult WriteOne(
-        string timestamp, DisplayRecorder recorder, IReadOnlyList<ClipPacket> packets, long originQpc)
+        string timestamp, IDisplayRecorder recorder, IReadOnlyList<ClipPacket> packets, long originQpc)
     {
         var screenIndex = ScreenIndexOf(recorder.Display.DeviceName);
         var path = Path.Combine(_config.OutputDirectory, $"{timestamp}-{screenIndex}.mov");

@@ -1,26 +1,24 @@
 using System.Runtime.InteropServices;
-using ReplayCapture.Core.Capture;
 using ReplayCapture.Core.Timing;
 using Sdcb.FFmpeg.Raw;
-
-using D3DTexture2D = Vortice.Direct3D11.ID3D11Texture2D;
 
 namespace ReplayCapture.Core.Encoders;
 
 /// <summary>
-/// Shared send-frame/receive-packet plumbing for every <see cref="IVideoEncoder"/> backend. What
-/// differs between NVENC, AMF and libx264 is how the source texture becomes an <c>AVFrame</c> the
-/// codec can consume (GPU hardware-frames-context blit for the two hardware backends, GPU→CPU
-/// readback into a system-memory frame for x264); everything from <c>avcodec_send_frame</c> onward
-/// — timestamp reconstruction, packet draining, flush, disposal — is identical, so it lives here
-/// once instead of being copy-pasted per backend.
+/// Shared send-frame/receive-packet plumbing for every <see cref="IVideoEncoder{TFrame}"/> backend.
+/// What differs between NVENC, AMF and libx264 (and, on Linux, VAAPI) is how the source frame
+/// becomes an <c>AVFrame</c> the codec can consume (GPU hardware-frames-context blit for the
+/// GPU-resident backends, GPU→CPU readback into a system-memory frame for x264); everything from
+/// <c>avcodec_send_frame</c> onward — timestamp reconstruction, packet draining, flush, disposal —
+/// is identical, so it lives here once instead of being copy-pasted per backend. Generic over the
+/// captured frame's native handle type so this shared plumbing needs no platform-specific GPU
+/// context field of its own — subclasses that need one (see <see cref="GpuVideoEncoderBase"/>) own
+/// it themselves.
 /// </summary>
-public abstract unsafe class VideoEncoderBase : IVideoEncoder
+public abstract unsafe class VideoEncoderBase<TFrame> : IVideoEncoder<TFrame>
 {
     /// <summary>AV_CODEC_FLAG_GLOBAL_HEADER — not surfaced as a constant by the Sdcb bindings.</summary>
     protected const int AvCodecFlagGlobalHeader = 1 << 22;
-
-    protected readonly D3DContext D3d;
 
     protected AVCodecContext* Codec;
     private AVFrame* _frame;
@@ -41,10 +39,8 @@ public abstract unsafe class VideoEncoderBase : IVideoEncoder
 
     public event Action<ReadOnlySpan<byte>, long, long, bool>? PacketReady;
 
-    protected VideoEncoderBase(D3DContext d3d, int width, int height, int framesPerSecond)
+    protected VideoEncoderBase(int width, int height, int framesPerSecond)
     {
-        D3d = d3d;
-
         // Every backend here needs even dimensions; odd-sized displays are rare but do exist.
         Width = width & ~1;
         Height = height & ~1;
@@ -73,9 +69,9 @@ public abstract unsafe class VideoEncoderBase : IVideoEncoder
     /// pixel data, in whatever form this backend's codec expects — a hardware D3D11 frame for NVENC
     /// and AMF, or a system-memory NV12 buffer for x264.
     /// </summary>
-    protected abstract void PopulateFrame(AVFrame* frame, D3DTexture2D source);
+    protected abstract void PopulateFrame(AVFrame* frame, TFrame source);
 
-    public void Encode(D3DTexture2D source, long frameIndex, long qpcTicks, bool forceKeyframe = false)
+    public void Encode(TFrame source, long frameIndex, long qpcTicks, bool forceKeyframe = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 

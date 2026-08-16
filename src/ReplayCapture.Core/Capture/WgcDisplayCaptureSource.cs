@@ -26,7 +26,7 @@ namespace ReplayCapture.Core.Capture;
 /// see <see cref="Config.CaptureBackend"/> for the numbers and when that cap does or doesn't matter.
 /// </para>
 /// </summary>
-public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource
+public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource<ID3D11Texture2D>
 {
     private readonly D3DContext _d3d;
     private readonly GraphicsCaptureItem _item;

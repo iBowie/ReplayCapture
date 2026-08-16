@@ -19,18 +19,20 @@ namespace ReplayCapture.Core.Encoders;
 /// the encoder — a GPU→CPU round-trip the two hardware paths never pay.
 /// </para>
 /// </summary>
-public sealed unsafe class X264VideoEncoder : VideoEncoderBase
+public sealed unsafe class X264VideoEncoder : VideoEncoderBase<D3DTexture2D>
 {
+    private readonly D3DContext _d3d;
     private readonly Nv12Converter _converter;
     private readonly D3DTexture2D _renderTarget;
     private readonly D3DTexture2D _staging;
 
     public X264VideoEncoder(D3DContext d3d, int width, int height, int framesPerSecond, int bitrateMbps)
-        : base(d3d, width, height, framesPerSecond)
+        : base(width, height, framesPerSecond)
     {
+        _d3d = d3d;
         _converter = new Nv12Converter(d3d, Width, Height, framesPerSecond);
 
-        _renderTarget = D3d.Device.CreateTexture2D(new Texture2DDescription
+        _renderTarget = _d3d.Device.CreateTexture2D(new Texture2DDescription
         {
             Width = (uint)Width,
             Height = (uint)Height,
@@ -44,7 +46,7 @@ public sealed unsafe class X264VideoEncoder : VideoEncoderBase
             MiscFlags = ResourceOptionFlags.None,
         });
 
-        _staging = D3d.Device.CreateTexture2D(new Texture2DDescription
+        _staging = _d3d.Device.CreateTexture2D(new Texture2DDescription
         {
             Width = (uint)Width,
             Height = (uint)Height,
@@ -126,14 +128,14 @@ public sealed unsafe class X264VideoEncoder : VideoEncoderBase
     protected override void PopulateFrame(AVFrame* frame, D3DTexture2D source)
     {
         _converter.Convert(source, _renderTarget, 0);
-        D3d.ImmediateContext.CopyResource(_staging, _renderTarget);
+        _d3d.ImmediateContext.CopyResource(_staging, _renderTarget);
 
         frame->format = (int)AVPixelFormat.Nv12;
         frame->width = Width;
         frame->height = Height;
         Check(ffmpeg.av_frame_get_buffer(frame, 32), "av_frame_get_buffer");
 
-        var mapped = D3d.ImmediateContext.Map(_staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+        var mapped = _d3d.ImmediateContext.Map(_staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
         try
         {
             var rowPitch = (int)mapped.RowPitch;
@@ -164,7 +166,7 @@ public sealed unsafe class X264VideoEncoder : VideoEncoderBase
         }
         finally
         {
-            D3d.ImmediateContext.Unmap(_staging, 0);
+            _d3d.ImmediateContext.Unmap(_staging, 0);
         }
     }
 

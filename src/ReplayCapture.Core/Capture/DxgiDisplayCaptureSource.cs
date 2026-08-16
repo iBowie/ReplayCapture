@@ -50,7 +50,7 @@ namespace ReplayCapture.Core.Capture;
 /// write into one can never overlap a read of the other.
 /// </para>
 /// </summary>
-public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource
+public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Texture2D>
 {
     private const int LatchBufferCount = 2;
 

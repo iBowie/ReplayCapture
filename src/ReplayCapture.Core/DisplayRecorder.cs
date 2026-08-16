@@ -1,9 +1,7 @@
 using ReplayCapture.Core.Buffering;
 using ReplayCapture.Core.Capture;
-using ReplayCapture.Core.Config;
 using ReplayCapture.Core.Diagnostics;
 using ReplayCapture.Core.Encoders;
-using ReplayCapture.Core.Muxing;
 using ReplayCapture.Core.Timing;
 
 namespace ReplayCapture.Core;
@@ -12,22 +10,28 @@ namespace ReplayCapture.Core;
 /// One display's complete always-on pipeline: capture, pace, encode, buffer — and, on demand,
 /// write the buffered window out as a <c>.mov</c>.
 /// <para>
-/// Each display gets its own instance. They share a <see cref="D3DContext"/> but nothing else, so
-/// displays of different resolutions and refresh rates run independently, and on Blackwell the two
-/// NVENC engines encode them in parallel.
+/// Generic over the backend's native frame handle (<typeparamref name="TFrame"/> — a D3D11 texture
+/// for the Windows backends, a VAAPI surface for a future Linux one), so this orchestration —
+/// pacing, rebuild-on-resize, ring buffering — is written once and shared by every platform rather
+/// than duplicated per backend. The capture source and encoder themselves are supplied as factories
+/// rather than built from a concrete GPU context and backend enum, which is what keeps this class
+/// from needing to know anything platform-specific at all.
+/// </para>
+/// <para>
+/// Each display gets its own instance. On Windows they share a <see cref="D3DContext"/> but nothing
+/// else, so displays of different resolutions and refresh rates run independently, and on Blackwell
+/// the two NVENC engines encode them in parallel.
 /// </para>
 /// </summary>
-public sealed class DisplayRecorder : IDisposable
+public sealed class DisplayRecorder<TFrame> : IDisplayRecorder
 {
-    private readonly D3DContext _d3d;
-    private readonly IDisplayCaptureSource _capture;
+    private readonly IDisplayCaptureSource<TFrame> _capture;
+    private readonly Func<int, int, IVideoEncoder<TFrame>> _encoderFactory;
     private readonly PacketRingBuffer _ring;
     private readonly FramePacer _pacer;
-    private readonly DisplayConfig _config;
-    private readonly VideoEncoderBackend _videoEncoderBackend;
     private readonly Lock _encoderGate = new();
 
-    private IVideoEncoder _encoder;
+    private IVideoEncoder<TFrame> _encoder;
 
     /// <summary>Set when the display changed size; the pacer rebuilds the encoder on its next tick.</summary>
     private volatile bool _rebuildRequested;
@@ -42,7 +46,7 @@ public sealed class DisplayRecorder : IDisposable
     public long FramesEncoded => _encoder.FramesEncoded;
     public long FramesArrived => _capture.FramesArrived;
 
-    /// <summary>True once Windows has closed this display's capture item and it cannot be resumed in place.</summary>
+    /// <summary>True once the backend has closed this display's capture and it cannot be resumed in place.</summary>
     public bool IsCaptureClosed => _capture.IsClosed;
 
     /// <summary>Frames the pacer had to invent because the screen had not changed.</summary>
@@ -61,33 +65,31 @@ public sealed class DisplayRecorder : IDisposable
     /// <summary>How many times the encoder had to be rebuilt after a resolution change.</summary>
     public long Rebuilds => Interlocked.Read(ref _rebuilds);
 
+    /// <param name="captureFactory">Builds the capture source. Called once, at construction time.</param>
+    /// <param name="encoderFactory">
+    /// Builds the encoder for a given size. Called at construction time and again on every rebuild,
+    /// so it must capture whatever else the backend needs (a GPU context, bitrate, ...) itself.
+    /// </param>
     public DisplayRecorder(
-        D3DContext d3d, DisplayInfo display, DisplayConfig config, int bufferSeconds, long memoryLimitBytes,
-        CaptureBackend captureBackend = CaptureBackend.Dxgi, VideoEncoderBackend videoEncoderBackend = VideoEncoderBackend.Nvenc)
+        DisplayInfo display, int framesPerSecond, int bufferSeconds, long memoryLimitBytes,
+        Func<IDisplayCaptureSource<TFrame>> captureFactory, Func<int, int, IVideoEncoder<TFrame>> encoderFactory)
     {
-        _d3d = d3d;
-        _config = config;
-        _videoEncoderBackend = videoEncoderBackend;
+        _encoderFactory = encoderFactory;
         Display = display;
-        FramesPerSecond = config.Fps ?? display.RefreshHz;
+        FramesPerSecond = framesPerSecond;
 
-        _capture = DisplayCaptureSourceFactory.Create(captureBackend, d3d, display);
+        _capture = captureFactory();
         _capture.ContentSizeChanged += OnContentSizeChanged;
 
         var size = _capture.ContentSize;
 
-        _encoder = VideoEncoderFactory.Create(videoEncoderBackend, d3d, size.Width, size.Height, FramesPerSecond, config.BitrateMbps);
+        _encoder = encoderFactory(size.Width, size.Height);
         _ring = new PacketRingBuffer(bufferSeconds, memoryLimitBytes);
         _encoder.PacketReady += OnPacketReady;
 
         _pacer = new FramePacer(FramesPerSecond, OnTick, display.DeviceName.Replace(@"\\.\", ""));
     }
 
-    /// <summary>
-    /// Asks the pacer to rebuild the capture pool and encoder on its next tick. Normally triggered
-    /// by a resolution change; also exposed so the rebuild path can be exercised deliberately
-    /// rather than only when someone happens to change their display settings.
-    /// </summary>
     public void RequestRebuild() => _rebuildRequested = true;
 
     private void OnContentSizeChanged(Windows.Graphics.SizeInt32 size)
@@ -120,8 +122,7 @@ public sealed class DisplayRecorder : IDisposable
                 _encoder.PacketReady -= OnPacketReady;
                 _encoder.Dispose();
 
-                _encoder = VideoEncoderFactory.Create(
-                    _videoEncoderBackend, _d3d, size.Width, size.Height, FramesPerSecond, _config.BitrateMbps);
+                _encoder = _encoderFactory(size.Width, size.Height);
                 _encoder.PacketReady += OnPacketReady;
 
                 _ring.Clear();
@@ -163,7 +164,7 @@ public sealed class DisplayRecorder : IDisposable
             }
         }
 
-        if (!_capture.TryGetLatest(out var texture, out var capturedQpc))
+        if (!_capture.TryGetLatest(out var frame, out var capturedQpc))
         {
             // Nothing captured yet. Emitting a black frame here would put a black flash in the
             // clip, so the grid simply starts when the first real frame lands.
@@ -177,7 +178,7 @@ public sealed class DisplayRecorder : IDisposable
         {
             lock (_encoderGate)
             {
-                _encoder.Encode(texture, frameIndex, scheduledQpc);
+                _encoder.Encode(frame, frameIndex, scheduledQpc);
             }
         }
         catch (Exception ex)

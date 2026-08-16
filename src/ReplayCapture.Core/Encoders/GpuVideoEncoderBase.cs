@@ -14,7 +14,7 @@ namespace ReplayCapture.Core.Encoders;
 /// this class owns the hw device, the frame pool, and feeding the pool through
 /// <see cref="Nv12Converter"/>.
 /// </summary>
-public abstract unsafe class GpuVideoEncoderBase : VideoEncoderBase
+public abstract unsafe class GpuVideoEncoderBase : VideoEncoderBase<D3DTexture2D>
 {
     private const int D3D11BindRenderTarget = 0x20;
 
@@ -24,14 +24,16 @@ public abstract unsafe class GpuVideoEncoderBase : VideoEncoderBase
     /// </summary>
     private const int SurfacePoolSize = 16;
 
+    private readonly D3DContext _d3d;
     private readonly Nv12Converter _converter;
 
     private AVBufferRef* _hwDevice;
     private AVBufferRef* _hwFrames;
 
     protected GpuVideoEncoderBase(D3DContext d3d, int width, int height, int framesPerSecond, int bitrateMbps)
-        : base(d3d, width, height, framesPerSecond)
+        : base(width, height, framesPerSecond)
     {
+        _d3d = d3d;
         _converter = new Nv12Converter(d3d, Width, Height, framesPerSecond);
 
         CreateHardwareDevice();
@@ -52,8 +54,8 @@ public abstract unsafe class GpuVideoEncoderBase : VideoEncoderBase
 
         // FFmpeg takes ownership of a reference and will Release it on teardown, so hand it one of
         // its own rather than letting it steal ours.
-        D3d.Device.AddRef();
-        d3dContext->device = (FFmpegD3D11Device*)D3d.Device.NativePointer;
+        _d3d.Device.AddRef();
+        d3dContext->device = (FFmpegD3D11Device*)_d3d.Device.NativePointer;
 
         Check(ffmpeg.av_hwdevice_ctx_init(_hwDevice), "av_hwdevice_ctx_init");
     }

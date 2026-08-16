@@ -1,20 +1,21 @@
-using Vortice.Direct3D11;
 using Windows.Graphics;
 
 namespace ReplayCapture.Core.Capture;
 
 /// <summary>
-/// One display's frame source: whatever backend is producing frames, <see cref="DisplayRecorder"/>
-/// only ever needs the newest one latched in a texture it can read at its own cadence.
+/// One display's frame source: whatever backend is producing frames, <see cref="DisplayRecorder{TFrame}"/>
+/// only ever needs the newest one latched in a handle it can read at its own cadence. Generic over
+/// that handle's native type — a D3D11 texture for the two Windows backends below, a VAAPI surface
+/// for a future Linux backend — so the pipeline above this interface never needs a platform check.
 /// <para>
-/// Two implementations exist — <see cref="DxgiDisplayCaptureSource"/> (raw
+/// Two Windows implementations exist — <see cref="DxgiDisplayCaptureSource"/> (raw
 /// <c>IDXGIOutputDuplication</c>) and <see cref="WgcDisplayCaptureSource"/>
 /// (Windows.Graphics.Capture) — selected per <see cref="Config.AppConfig.CaptureBackend"/>. See
 /// that property's doc comment and the README's capture-backend section for why one is the default
 /// and when the other is worth picking instead.
 /// </para>
 /// </summary>
-public interface IDisplayCaptureSource : IDisposable
+public interface IDisplayCaptureSource<TFrame> : IDisposable
 {
     DisplayInfo Display { get; }
 
@@ -38,7 +39,7 @@ public interface IDisplayCaptureSource : IDisposable
     /// Hands the caller the latest captured frame. Returns false until the very first frame lands —
     /// on a completely static display that can take a moment, because nothing has changed to send.
     /// </summary>
-    bool TryGetLatest(out ID3D11Texture2D texture, out long qpcTicks);
+    bool TryGetLatest(out TFrame frame, out long qpcTicks);
 
     /// <summary>Forces capture to be torn down and re-acquired at the given size.</summary>
     void Recreate(SizeInt32 size);
