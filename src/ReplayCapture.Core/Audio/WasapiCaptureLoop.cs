@@ -27,10 +27,33 @@ internal sealed class WasapiCaptureLoop : IDisposable
 
     private long _framesCaptured;
     private long _discontinuities;
+    private long _nextFrame = long.MinValue;
     private bool _disposed;
 
     public long FramesCaptured => Interlocked.Read(ref _framesCaptured);
     public long Discontinuities => Interlocked.Read(ref _discontinuities);
+
+    /// <summary>
+    /// Picks the frame position a packet should be written at: right after the previous packet
+    /// unless WASAPI itself flagged this one as discontinuous.
+    /// <para>
+    /// The device position WASAPI attaches to each packet is precise enough to place the very first
+    /// packet, but is not a reliable clock to re-derive position from on every subsequent one — on a
+    /// render-loopback endpoint mixing several concurrently active clients it jitters by a handful of
+    /// frames in both directions, without any samples actually having been gained or lost. Comparing
+    /// timestamps to detect overlaps or gaps therefore chases noise: trimming a "duplicate" that was
+    /// actually new data drops real audio (an audible silent tick), and keeping an "overlap" that was
+    /// actually just jitter double-sums real audio (an audible amplitude spike) — both sound like the
+    /// exact click this exists to remove. WASAPI's own contract for packet continuity is the
+    /// discontinuity flag, not the timestamp: absent that flag, it is asserting the packet picks up
+    /// exactly where the last one left off, so that assertion — not the
+    /// jittery timestamp — is what should place it. The timestamp is trusted again only when the flag
+    /// says the stream really did skip, which is when a resync (and the silence that fills the real
+    /// gap) is actually correct.
+    /// </para>
+    /// </summary>
+    internal static long ResolveFrameStart(long nextFrame, long reportedFrameStart, bool discontinuous) =>
+        discontinuous || nextFrame == long.MinValue ? reportedFrameStart : nextFrame;
 
     public WasapiCaptureLoop(
         IAudioClient client,
@@ -103,7 +126,8 @@ internal sealed class WasapiCaptureLoop : IDisposable
             {
                 if (framesAvailable == 0) continue;
 
-                if ((flags & BufferflagsDataDiscontinuity) != 0)
+                var discontinuous = (flags & BufferflagsDataDiscontinuity) != 0;
+                if (discontinuous)
                 {
                     // Not fatal. Because tracks are addressed by timeline, a gap becomes silence in
                     // the right place rather than shifting everything that follows.
@@ -126,11 +150,16 @@ internal sealed class WasapiCaptureLoop : IDisposable
                     produced = _resampler.Convert(data, (int)framesAvailable, _scratch);
                 }
 
+                var reportedFrameStart = AudioFormat.TicksToFrames(qpcTicks);
+                var frameStart = ResolveFrameStart(_nextFrame, reportedFrameStart, discontinuous);
+
                 if (produced > 0)
                 {
-                    _onSamples(qpcTicks, _scratch.AsMemory(0, produced * AudioFormat.Channels));
+                    _onSamples(AudioFormat.FramesToTicks(frameStart), _scratch.AsMemory(0, produced * AudioFormat.Channels));
                     Interlocked.Add(ref _framesCaptured, produced);
                 }
+
+                _nextFrame = frameStart + produced;
             }
             finally
             {
