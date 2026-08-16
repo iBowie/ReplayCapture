@@ -1,6 +1,9 @@
 using ReplayCapture.Core.Diagnostics;
+#if WINDOWS
+using Microsoft.Win32.SafeHandles;
 using Windows.Win32;
 using Windows.Win32.Foundation;
+#endif
 
 namespace ReplayCapture.Core.Timing;
 
@@ -103,18 +106,9 @@ public sealed class FramePacer : IDisposable
         return skip;
     }
 
-    private unsafe void Run()
+    private void Run()
     {
-        using var timer = PInvoke.CreateWaitableTimerEx(
-            (Windows.Win32.Security.SECURITY_ATTRIBUTES?)null,
-            lpTimerName: null,
-            CreateWaitableTimerHighResolution,
-            TimerAllAccess);
-
-        if (timer is null || timer.IsInvalid)
-        {
-            Log.Warn("High-resolution waitable timer unavailable; falling back to Thread.Sleep pacing.");
-        }
+        using var timer = CreateTimer();
 
         var start = Clock.Now;
         var token = _cancellation.Token;
@@ -146,17 +140,7 @@ public sealed class FramePacer : IDisposable
 
             if (remaining > 0)
             {
-                if (timer is { IsInvalid: false })
-                {
-                    // Negative due time means "relative", in 100 ns units - the same unit the whole
-                    // pipeline already uses, so no conversion is needed.
-                    var dueTime = -remaining;
-                    if (PInvoke.SetWaitableTimerEx(new HANDLE(timer.DangerousGetHandle()), &dueTime, 0, null, null, null, 0))
-                    {
-                        PInvoke.WaitForSingleObject(new HANDLE(timer.DangerousGetHandle()), 1000);
-                    }
-                }
-                else
+                if (!TryWaitPrecise(timer, remaining))
                 {
                     var milliseconds = (int)Clock.ToSeconds(remaining).ClampMilliseconds();
                     if (milliseconds > 0) Thread.Sleep(milliseconds);
@@ -193,6 +177,55 @@ public sealed class FramePacer : IDisposable
         if (_thread.IsAlive) _thread.Join(TimeSpan.FromSeconds(2));
         _cancellation.Dispose();
     }
+
+#if WINDOWS
+    /// <summary>
+    /// A high-resolution waitable timer, when the OS grants one. Sub-millisecond wait accuracy is
+    /// what keeps <see cref="LateTicks"/> near zero at high frame rates; <see cref="TryWaitPrecise"/>
+    /// falls back to <see cref="Thread.Sleep(int)"/> pacing when this comes back unavailable.
+    /// </summary>
+    private static SafeFileHandle? CreateTimer()
+    {
+        var timer = PInvoke.CreateWaitableTimerEx(
+            (Windows.Win32.Security.SECURITY_ATTRIBUTES?)null,
+            lpTimerName: null,
+            CreateWaitableTimerHighResolution,
+            TimerAllAccess);
+
+        if (timer is null || timer.IsInvalid)
+        {
+            Log.Warn("High-resolution waitable timer unavailable; falling back to Thread.Sleep pacing.");
+            return null;
+        }
+
+        return timer;
+    }
+
+    /// <summary>Waits out <paramref name="remainingTicks"/> on the high-res timer. False if none is available.</summary>
+    private static unsafe bool TryWaitPrecise(SafeFileHandle? timer, long remainingTicks)
+    {
+        if (timer is null) return false;
+
+        // Negative due time means "relative", in 100 ns units - the same unit the whole pipeline
+        // already uses, so no conversion is needed.
+        var dueTime = -remainingTicks;
+        if (!PInvoke.SetWaitableTimerEx(new HANDLE(timer.DangerousGetHandle()), &dueTime, 0, null, null, null, 0))
+            return false;
+
+        PInvoke.WaitForSingleObject(new HANDLE(timer.DangerousGetHandle()), 1000);
+        return true;
+    }
+#else
+    /// <summary>
+    /// No high-resolution timer on this platform yet — every tick falls back to
+    /// <see cref="Thread.Sleep(int)"/> pacing. A Linux backend should replace this with a
+    /// <c>clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, ...)</c> wait for parity with Windows'
+    /// sub-ms accuracy; see the Linux support plan's timing phase.
+    /// </summary>
+    private static IDisposable? CreateTimer() => null;
+
+    private static bool TryWaitPrecise(IDisposable? timer, long remainingTicks) => false;
+#endif
 }
 
 internal static class PacerMath

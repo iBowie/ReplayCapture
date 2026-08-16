@@ -3,7 +3,6 @@ using ReplayCapture.Core.Timing;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Vortice.Mathematics;
-using Windows.Graphics;
 
 namespace ReplayCapture.Core.Capture;
 
@@ -92,10 +91,10 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
     public bool IsClosed => _closed;
 
     /// <summary>Current content size. Changes when the user alters resolution or rotates a display.</summary>
-    public SizeInt32 ContentSize { get; private set; }
+    public FrameSize ContentSize { get; private set; }
 
     /// <summary>Raised when the display's size changed and the pipeline needs rebuilding.</summary>
-    public event Action<SizeInt32>? ContentSizeChanged;
+    public event Action<FrameSize>? ContentSizeChanged;
 
     /// <summary>Total frames Desktop Duplication has delivered. Compare with encoded frames to see duplicate ratio.</summary>
     public long FramesArrived => Interlocked.Read(ref _framesArrived);
@@ -108,7 +107,7 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
 
         _duplication = Duplicate();
         var desc = _duplication.Description;
-        ContentSize = new SizeInt32 { Width = (int)desc.ModeDescription.Width, Height = (int)desc.ModeDescription.Height };
+        ContentSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
 
         _thread = new Thread(Run)
         {
@@ -218,7 +217,7 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
             {
                 _duplication = Duplicate();
                 var desc = _duplication.Description;
-                var newSize = new SizeInt32 { Width = (int)desc.ModeDescription.Width, Height = (int)desc.ModeDescription.Height };
+                var newSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
 
                 if (newSize.Width != ContentSize.Width || newSize.Height != ContentSize.Height)
                 {
@@ -359,14 +358,14 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
     }
 
     /// <summary>Forces the duplication to be torn down and re-acquired at the given size.</summary>
-    public void Recreate(SizeInt32 size)
+    public void Recreate(FrameSize size)
     {
         lock (_duplicationGate)
         {
             _duplication.Dispose();
             _duplication = Duplicate();
             var desc = _duplication.Description;
-            ContentSize = new SizeInt32 { Width = (int)desc.ModeDescription.Width, Height = (int)desc.ModeDescription.Height };
+            ContentSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
         }
 
         Log.Info($"Duplication for {Display.DeviceName} recreated at {ContentSize.Width}x{ContentSize.Height}.");

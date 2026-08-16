@@ -6,14 +6,6 @@ using Windows.Win32.Media.Audio;
 
 namespace ReplayCapture.Core.Audio;
 
-/// <summary>Anything that can feed samples into a track.</summary>
-public interface IAudioSource : IDisposable
-{
-    string Name { get; }
-    event Action<long, ReadOnlyMemory<float>>? SamplesReady;
-    void Start();
-}
-
 /// <summary>
 /// Captures one WASAPI endpoint — a microphone, or a playback device in loopback mode.
 /// <para>

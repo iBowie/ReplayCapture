@@ -1,5 +1,3 @@
-using Windows.Graphics;
-
 namespace ReplayCapture.Core.Capture;
 
 /// <summary>
@@ -27,10 +25,10 @@ public interface IDisplayCaptureSource<TFrame> : IDisposable
     bool IsClosed { get; }
 
     /// <summary>Current content size. Changes when the user alters resolution or rotates a display.</summary>
-    SizeInt32 ContentSize { get; }
+    FrameSize ContentSize { get; }
 
     /// <summary>Raised when the display's size changed and the pipeline needs rebuilding.</summary>
-    event Action<SizeInt32>? ContentSizeChanged;
+    event Action<FrameSize>? ContentSizeChanged;
 
     /// <summary>Total frames the backend has delivered. Compare with encoded frames to see duplicate ratio.</summary>
     long FramesArrived { get; }
@@ -42,5 +40,5 @@ public interface IDisplayCaptureSource<TFrame> : IDisposable
     bool TryGetLatest(out TFrame frame, out long qpcTicks);
 
     /// <summary>Forces capture to be torn down and re-acquired at the given size.</summary>
-    void Recreate(SizeInt32 size);
+    void Recreate(FrameSize size);
 }

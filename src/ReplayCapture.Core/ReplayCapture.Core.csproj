@@ -15,7 +15,18 @@
     <InternalsVisibleTo Include="ReplayCapture.Tests" />
   </ItemGroup>
 
-  <ItemGroup>
+  <!-- Windows-only sources: DXGI/WGC capture, D3D11 encode, WASAPI audio, and the ReplaySession
+       composition root that wires them together. Excluded from the bare net10.0 (Linux) leg so it
+       never references Vortice/CsWin32/WinRT types at all — a Linux capture/encode/audio backend
+       and its own composition root land here in later phases. -->
+  <ItemGroup Condition="!$(TargetFramework.Contains('windows'))">
+    <Compile Remove="Capture\Windows\**\*.cs" />
+    <Compile Remove="Encoders\Windows\**\*.cs" />
+    <Compile Remove="Audio\Windows\**\*.cs" />
+    <Compile Remove="Windows\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$(TargetFramework.Contains('windows'))">
     <!-- Precompiled at build time is unnecessary here — fxc output is checked in directly since the
          cursor-blit shader never changes. Compiling via D3DCompiler at runtime would just add a
          native dependency for no benefit. -->
@@ -24,7 +35,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Shared codec/mux bindings on both TFMs. No Linux runtime package exists yet (verified: no
+         Sdcb.FFmpeg.runtime.linux-x64 on NuGet) — the Linux leg compiles against this reference
+         package only and resolves the native libraries at runtime via
+         DynamicallyLoadedBindings.LibrariesPath pointed at the distro's system FFmpeg, once a Linux
+         backend actually calls into it. -->
     <PackageReference Include="Sdcb.FFmpeg" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$(TargetFramework.Contains('windows'))">
     <PackageReference Include="Sdcb.FFmpeg.runtime.windows-x64" Version="7.1.0" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />

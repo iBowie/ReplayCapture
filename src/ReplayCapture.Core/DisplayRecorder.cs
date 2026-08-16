@@ -92,7 +92,7 @@ public sealed class DisplayRecorder<TFrame> : IDisplayRecorder
 
     public void RequestRebuild() => _rebuildRequested = true;
 
-    private void OnContentSizeChanged(Windows.Graphics.SizeInt32 size)
+    private void OnContentSizeChanged(FrameSize size)
     {
         // Raised on a capture callback thread. Only flag it here — rebuilding the encoder from this
         // thread would race the pacer mid-encode.

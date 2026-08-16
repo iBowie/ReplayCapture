@@ -1,17 +1,32 @@
 <Project>
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.20348.0</SupportedOSPlatformVersion>
+    <!--
+      Every project besides Core targets Windows only for now (the App shell, and the Probe/Tests
+      that exercise it, have no Linux leg yet). Core multi-targets so its platform-portable pieces
+      (muxing, timing, audio track/config logic, the generic capture/encoder abstractions) can be
+      built and tested against a Linux TFM even before a real Linux backend exists for any of them —
+      see Capture/Windows, Encoders/Windows, Audio/Windows and Windows/ReplaySession.cs for what's
+      excluded from that leg, and ReplayCapture.Core.csproj for the per-TFM package conditioning.
+    -->
+    <TargetFramework Condition="'$(MSBuildProjectName)' != 'ReplayCapture.Core'">net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetFrameworks Condition="'$(MSBuildProjectName)' == 'ReplayCapture.Core'">net10.0-windows10.0.26100.0;net10.0</TargetFrameworks>
+    <SupportedOSPlatformVersion Condition="$(TargetFramework.Contains('windows'))">10.0.20348.0</SupportedOSPlatformVersion>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-    <!-- NVENC, D3D11 and the FFmpeg native runtime are x64-only. -->
+    <!-- NVENC, D3D11 and the FFmpeg native runtime are x64-only; kept x64-only on the Linux leg too
+         for consistency (no ARM target). -->
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(TargetFramework)' == '' or $(TargetFramework.Contains('windows'))">win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(TargetFramework)' != '' and !$(TargetFramework.Contains('windows'))">linux-x64</RuntimeIdentifier>
+
+    <!-- For the handful of shared files with one small platform-specific branch (e.g. FramePacer's
+         high-resolution timer) rather than a whole separate implementation file. -->
+    <DefineConstants Condition="$(TargetFramework.Contains('windows'))">$(DefineConstants);WINDOWS</DefineConstants>
 
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
 

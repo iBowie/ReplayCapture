@@ -49,11 +49,14 @@ public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textur
     /// </summary>
     public bool IsClosed => _closed;
 
+    /// <summary>Current content size, in the WinRT type the frame pool itself uses.</summary>
+    private SizeInt32 _wgcContentSize;
+
     /// <summary>Current content size. Changes when the user alters resolution or rotates a display.</summary>
-    public SizeInt32 ContentSize { get; private set; }
+    public FrameSize ContentSize => new(_wgcContentSize.Width, _wgcContentSize.Height);
 
     /// <summary>Raised when the display's size changed and the pipeline needs rebuilding.</summary>
-    public event Action<SizeInt32>? ContentSizeChanged;
+    public event Action<FrameSize>? ContentSizeChanged;
 
     /// <summary>Total frames WGC has delivered. Compare with encoded frames to see duplicate ratio.</summary>
     public long FramesArrived => Interlocked.Read(ref _framesArrived);
@@ -64,7 +67,7 @@ public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textur
         Display = display;
 
         _item = Direct3DInterop.CreateItemForMonitor(display.MonitorHandle);
-        ContentSize = _item.Size;
+        _wgcContentSize = _item.Size;
 
         // CreateFreeThreaded, not Create: the latter needs a DispatcherQueue on the calling thread
         // and would deliver frames on the UI thread, which is the last place capture should run.
@@ -72,7 +75,7 @@ public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textur
             _d3d.WinRTDevice,
             DirectXPixelFormat.B8G8R8A8UIntNormalized,
             numberOfBuffers: 2,
-            size: ContentSize);
+            size: _wgcContentSize);
 
         _framePool.FrameArrived += OnFrameArrived;
 
@@ -117,12 +120,12 @@ public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textur
             using var frame = sender.TryGetNextFrame();
             if (frame is null) return;
 
-            if (frame.ContentSize.Width != ContentSize.Width || frame.ContentSize.Height != ContentSize.Height)
+            if (frame.ContentSize.Width != _wgcContentSize.Width || frame.ContentSize.Height != _wgcContentSize.Height)
             {
                 var newSize = frame.ContentSize;
                 Log.Info($"{Display.DeviceName} resized to {newSize.Width}x{newSize.Height}.");
-                ContentSize = newSize;
-                ContentSizeChanged?.Invoke(newSize);
+                _wgcContentSize = newSize;
+                ContentSizeChanged?.Invoke(new FrameSize(newSize.Width, newSize.Height));
                 return;
             }
 
@@ -186,10 +189,10 @@ public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textur
     }
 
     /// <summary>Rebuilds the frame pool after a resolution change.</summary>
-    public void Recreate(SizeInt32 size)
+    public void Recreate(FrameSize size)
     {
-        ContentSize = size;
-        _framePool.Recreate(_d3d.WinRTDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, size);
+        _wgcContentSize = new SizeInt32 { Width = size.Width, Height = size.Height };
+        _framePool.Recreate(_d3d.WinRTDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, _wgcContentSize);
         Log.Info($"Frame pool for {Display.DeviceName} recreated at {size.Width}x{size.Height}.");
     }
 
