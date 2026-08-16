@@ -26,6 +26,15 @@
     <Compile Remove="Windows\**\*.cs" />
   </ItemGroup>
 
+  <!-- Linux-only sources (Linux support plan Phase 2/3 drafts: VAAPI encode, PipeWire capture,
+       portal negotiation) — excluded from the Windows leg for the same reason in reverse: this code
+       references Tmds.DBus.Protocol types not referenced by that TFM at all. -->
+  <ItemGroup Condition="$(TargetFramework.Contains('windows'))">
+    <Compile Remove="Capture\Linux\**\*.cs" />
+    <Compile Remove="Encoders\Linux\**\*.cs" />
+    <Compile Remove="Audio\Linux\**\*.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="$(TargetFramework.Contains('windows'))">
     <!-- Precompiled at build time is unnecessary here — fxc output is checked in directly since the
          cursor-blit shader never changes. Compiling via D3DCompiler at runtime would just add a
@@ -41,6 +50,13 @@
          DynamicallyLoadedBindings.LibrariesPath pointed at the distro's system FFmpeg, once a Linux
          backend actually calls into it. -->
     <PackageReference Include="Sdcb.FFmpeg" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="!$(TargetFramework.Contains('windows'))">
+    <!-- xdg-desktop-portal ScreenCast negotiation (Capture/Linux/Portal). NativeAOT-compatible,
+         source-generator-based — matches this codebase's existing preference (see the WASAPI
+         GeneratedComInterface interop) for AOT-safe interop over reflection. -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.2" />
   </ItemGroup>
 
   <ItemGroup Condition="$(TargetFramework.Contains('windows'))">
