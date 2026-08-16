@@ -32,6 +32,19 @@ public sealed record AppConfig
     public IReadOnlyList<AudioTrackConfig> AudioTracks { get; init; } = DefaultAudioTracks;
 
     /// <summary>
+    /// Named sets of executable patterns, so a track rule can say <c>group:comms</c> instead of
+    /// spelling out every app in the group with <c>proc:</c>. Looked up case-insensitively; entries
+    /// support the same <c>*</c>/<c>?</c> wildcards as <c>proc:</c>.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> ProcessGroups { get; init; } = DefaultProcessGroups;
+
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> DefaultProcessGroups => new Dictionary<string, IReadOnlyList<string>>
+    {
+        ["comms"] = ["discord.exe", "ms-teams.exe", "slack.exe", "telegram.exe"],
+        ["music"] = ["spotify.exe", "foobar2000.exe"],
+    };
+
+    /// <summary>
     /// Six tracks is the default layout, not a limit — the muxer writes however many are configured.
     /// </summary>
     public static IReadOnlyList<AudioTrackConfig> DefaultAudioTracks =>

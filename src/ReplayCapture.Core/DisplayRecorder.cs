@@ -41,12 +41,21 @@ public sealed class DisplayRecorder : IDisposable
     public long FramesEncoded => _encoder.FramesEncoded;
     public long FramesArrived => _capture.FramesArrived;
 
+    /// <summary>True once Windows has closed this display's capture item and it cannot be resumed in place.</summary>
+    public bool IsCaptureClosed => _capture.IsClosed;
+
     /// <summary>Frames the pacer had to invent because the screen had not changed.</summary>
     public long DuplicateFrames => Interlocked.Read(ref _duplicateFrames);
 
     public double SecondsBuffered => _ring.SecondsBuffered;
     public long BufferedBytes => _ring.Bytes;
     public long LateTicks => _pacer.LateTicks;
+
+    /// <summary>
+    /// Frames skipped to keep this display's schedule from drifting behind real time. A nonzero,
+    /// climbing count means the configured frame rate is not sustainable under the current load.
+    /// </summary>
+    public long FramesSkippedForDrift => _pacer.FramesSkippedForDrift;
 
     /// <summary>How many times the encoder had to be rebuilt after a resolution change.</summary>
     public long Rebuilds => Interlocked.Read(ref _rebuilds);

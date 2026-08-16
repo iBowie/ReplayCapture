@@ -12,6 +12,9 @@ public enum AudioSourceKind
 
     /// <summary>Per-process loopback, matching processes by executable name.</summary>
     Process,
+
+    /// <summary>Per-process loopback, matching every process named in a <see cref="AppConfig.ProcessGroups"/> entry.</summary>
+    Group,
 }
 
 /// <summary>
@@ -24,6 +27,8 @@ public enum AudioSourceKind
 ///   <item><c>proc:spotify.exe</c> — include this process (and its child tree)</item>
 ///   <item><c>proc:!spotify.exe</c> — exclude this process</item>
 ///   <item><c>proc:*</c> — include every process; combine with exclusions for a "everything else" track</item>
+///   <item><c>group:comms</c> — include every process named in the <c>comms</c> entry of <see cref="AppConfig.ProcessGroups"/></item>
+///   <item><c>group:!comms</c> — exclude every process in that group</item>
 /// </list>
 /// Executable patterns support <c>*</c> and <c>?</c> wildcards and are matched case-insensitively.
 /// </summary>
@@ -36,6 +41,9 @@ public sealed record AudioSourceSpec
 
     /// <summary>Executable-name pattern for <see cref="AudioSourceKind.Process"/> sources.</summary>
     public string? ProcessPattern { get; init; }
+
+    /// <summary>Group name for <see cref="AudioSourceKind.Group"/> sources, looked up case-insensitively.</summary>
+    public string? GroupName { get; init; }
 
     /// <summary>
     /// True when this spec *removes* processes from the track rather than adding them.
@@ -125,13 +133,47 @@ public sealed record AudioSourceSpec
                 return true;
             }
 
+            case "group":
+            {
+                if (parts.Length != 2 || parts[1].Length == 0)
+                {
+                    error = "expected 'group:<name>' or 'group:!<name>'";
+                    return false;
+                }
+
+                var name = parts[1];
+                var exclude = name.StartsWith('!');
+                if (exclude) name = name[1..];
+
+                if (name.Length == 0)
+                {
+                    error = "exclusion needs a group name";
+                    return false;
+                }
+
+                result = new AudioSourceSpec
+                {
+                    Kind = AudioSourceKind.Group,
+                    GroupName = name,
+                    IsExclusion = exclude,
+                    Raw = trimmed,
+                };
+                return true;
+            }
+
             default:
-                error = $"unknown source prefix '{parts[0]}' (expected 'device' or 'proc')";
+                error = $"unknown source prefix '{parts[0]}' (expected 'device', 'proc', or 'group')";
                 return false;
         }
     }
 
-    /// <summary>Does the given executable name (e.g. "Spotify.exe") match this process spec?</summary>
+    /// <summary>
+    /// Does the given executable name (e.g. "Spotify.exe") match this process spec?
+    /// <see cref="AudioSourceKind.Group"/> specs never match directly —
+    /// <see cref="ReplayCapture.Core.Audio.ProcessTrackBinding"/> expands them into per-process specs
+    /// first, since resolving a group name needs <see cref="AppConfig.ProcessGroups"/>, which this
+    /// type has no reference to.
+    /// </summary>
     public bool MatchesProcess(string executableName)
     {
         if (Kind != AudioSourceKind.Process) return false;
@@ -142,4 +184,29 @@ public sealed record AudioSourceSpec
     }
 
     public override string ToString() => Raw;
+
+    /// <summary>
+    /// Looks up a <c>group:</c> spec's <see cref="GroupName"/> in a group table, case-insensitively.
+    /// Shared by <see cref="ReplayCapture.Core.Audio.ProcessTrackBinding"/> (live matching) and
+    /// <c>rcprobe sessions</c> (static config checking) so the two never disagree about what a group
+    /// expands to.
+    /// </summary>
+    public static bool TryResolveGroup(
+        string groupName, IReadOnlyDictionary<string, IReadOnlyList<string>>? groups, out IReadOnlyList<string> members)
+    {
+        if (groups is not null)
+        {
+            foreach (var (key, value) in groups)
+            {
+                if (string.Equals(key, groupName, StringComparison.OrdinalIgnoreCase))
+                {
+                    members = value;
+                    return true;
+                }
+            }
+        }
+
+        members = [];
+        return false;
+    }
 }

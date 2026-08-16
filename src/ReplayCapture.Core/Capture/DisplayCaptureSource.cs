@@ -29,8 +29,16 @@ public sealed class DisplayCaptureSource : IDisposable
     private long _latchQpc;
     private long _framesArrived;
     private bool _disposed;
+    private volatile bool _closed;
 
     public DisplayInfo Display { get; }
+
+    /// <summary>
+    /// True once Windows has torn down the capture item on us — e.g. a display power-off or a
+    /// sleep/resume cycle invalidating the session. The pipeline cannot restart capture on a closed
+    /// item, so this is surfaced for the owner to rebuild instead.
+    /// </summary>
+    public bool IsClosed => _closed;
 
     /// <summary>Current content size. Changes when the user alters resolution or rotates a display.</summary>
     public SizeInt32 ContentSize { get; private set; }
@@ -63,7 +71,13 @@ public sealed class DisplayCaptureSource : IDisposable
         _session.IsCursorCaptureEnabled = true;
         TryDisableCaptureBorder();
 
-        _item.Closed += (_, _) => Log.Warn($"Capture item for {display.DeviceName} was closed by the system.");
+        _item.Closed += (_, _) =>
+        {
+            // Seen when a display is unplugged, powered off, or the system sleeps and resumes —
+            // Windows tears the capture item down rather than keeping it alive across the change.
+            _closed = true;
+            Log.Warn($"Capture item for {display.DeviceName} was closed by the system.");
+        };
 
         _session.StartCapture();
         Log.Info($"Capture started for {display.DeviceName} at {ContentSize.Width}x{ContentSize.Height}.");

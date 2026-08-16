@@ -25,6 +25,7 @@ IMMDeviceCollection
 IMMNotificationClient
 IAudioClient
 IAudioCaptureClient
+IAudioRenderClient
 IAudioClock
 EDataFlow
 ERole

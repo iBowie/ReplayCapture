@@ -187,7 +187,7 @@
                         </StackPanel>
 
                         <TextBlock Grid.Row="1" Margin="0,12,0,4" Style="{StaticResource Hint}"
-                                   Text="Sources, one per line:   device:render:default   ·   device:capture:default   ·   proc:spotify.exe   ·   proc:!discord.exe   ·   proc:*" />
+                                   Text="Sources, one per line:   device:render:default   ·   device:capture:default   ·   proc:spotify.exe   ·   proc:!discord.exe   ·   proc:*   ·   group:comms   ·   group:!comms" />
 
                         <TextBox Grid.Row="2" AcceptsReturn="True" FontFamily="Cascadia Mono, Consolas"
                                  VerticalScrollBarVisibility="Auto"
@@ -212,6 +212,54 @@
                                     Command="{Binding ExcludeProcessFromCatchAllCommand}"
                                     ToolTip="Add an exclusion on every track using proc:*, so this app is not captured twice" />
                         </StackPanel>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <!-- ============================ Process groups ============================ -->
+            <TabItem Header="Process groups">
+                <Grid Margin="14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="230" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,10" Style="{StaticResource Hint}"
+                               Text="Named sets of executables, so a track's Sources can say group:comms (or group:!comms to exclude) instead of listing every app with proc:." />
+
+                    <ListBox Grid.Row="1" Grid.Column="0" Margin="0,0,12,0"
+                             Background="#FF25282D" Foreground="#FFE8EAED" BorderBrush="#FF3C4043"
+                             ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup}"
+                             DisplayMemberPath="Name" />
+
+                    <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Add" MinWidth="70" Command="{Binding AddGroupCommand}" />
+                        <Button Content="Remove" MinWidth="70" Command="{Binding RemoveGroupCommand}" />
+                    </StackPanel>
+
+                    <Grid Grid.Row="1" Grid.Column="1" DataContext="{Binding SelectedGroup}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0" Orientation="Horizontal">
+                            <TextBlock Text="Name" Width="52" />
+                            <TextBox Width="220" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="1" Margin="0,12,0,4" Style="{StaticResource Hint}"
+                                   Text="Member executables, one per line, e.g. discord.exe. Accepts * and ? wildcards, matched case-insensitively." />
+
+                        <TextBox Grid.Row="2" AcceptsReturn="True" FontFamily="Cascadia Mono, Consolas"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Text="{Binding MembersText, UpdateSourceTrigger=PropertyChanged}" />
                     </Grid>
                 </Grid>
             </TabItem>

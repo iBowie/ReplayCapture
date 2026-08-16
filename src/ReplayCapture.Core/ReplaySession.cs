@@ -98,6 +98,16 @@ public sealed class ReplaySession : IDisposable
                 return;
             }
 
+            var closed = _recorders.Where(r => r.IsCaptureClosed).ToList();
+            if (closed.Count > 0)
+            {
+                // Windows.Graphics.Capture tears an item down rather than reviving it — seen when a
+                // display is unplugged, powered off, or the system sleeps and resumes. There is no
+                // in-place recreation for a closed item, so the whole session must be rebuilt.
+                SignalRecovery($"the capture surface closed for {Describe(closed.Select(r => r.Display.DeviceName).ToList())}");
+                return;
+            }
+
             // A resolution change is handled inside the recorder; only displays appearing or
             // disappearing need the session rebuilt, because that changes how many files a save
             // produces and how the memory cap is divided.
@@ -195,19 +205,19 @@ public sealed class ReplaySession : IDisposable
             }
 
             var originQpc = snapshots.Min(entry => entry.Packets[0].QpcTicks);
-            var folder = Path.Combine(_config.OutputDirectory, $"replay_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}");
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
 
             var results = new List<SaveResult>();
             foreach (var (recorder, packets) in snapshots)
             {
                 try
                 {
-                    results.Add(WriteOne(folder, recorder, packets, originQpc));
+                    results.Add(WriteOne(timestamp, recorder, packets, originQpc));
                 }
                 catch (Exception ex)
                 {
                     Log.Error($"Failed to write the clip for {recorder.Display.DeviceName}", ex);
-                    results.Add(new SaveResult(false, folder, 0, 0, ex.Message));
+                    results.Add(new SaveResult(false, _config.OutputDirectory, 0, 0, ex.Message));
                 }
             }
 
@@ -216,10 +226,10 @@ public sealed class ReplaySession : IDisposable
     }
 
     private SaveResult WriteOne(
-        string folder, DisplayRecorder recorder, IReadOnlyList<ClipPacket> packets, long originQpc)
+        string timestamp, DisplayRecorder recorder, IReadOnlyList<ClipPacket> packets, long originQpc)
     {
-        var label = recorder.Display.DeviceName.Replace(@"\\.\", "").ToLowerInvariant();
-        var path = Path.Combine(folder, $"{label}_{recorder.Width}x{recorder.Height}.mov");
+        var screenIndex = ScreenIndexOf(recorder.Display.DeviceName);
+        var path = Path.Combine(_config.OutputDirectory, $"{timestamp}-{screenIndex}.mov");
 
         using var writer = new MovWriter(path);
 
@@ -255,6 +265,13 @@ public sealed class ReplaySession : IDisposable
                  $"{_audio.Tracks.Count} audio track(s), {bytes / (1024 * 1024)} MB.");
 
         return new SaveResult(true, path, duration, bytes, null);
+    }
+
+    /// <summary>Windows' own display number, e.g. <c>\\.\DISPLAY1</c> -&gt; <c>1</c>.</summary>
+    internal static string ScreenIndexOf(string deviceName)
+    {
+        var digits = new string(deviceName.Where(char.IsDigit).ToArray());
+        return digits.Length > 0 ? digits : deviceName.Replace(@"\\.\", "").ToLowerInvariant();
     }
 
     public void UpdateConfig(AppConfig config) => _config = config;

@@ -6,7 +6,11 @@ namespace ReplayCapture.Tests;
 public class ProcessTrackBindingTests
 {
     private static ProcessTrackBinding Binding(string trackName, params string[] sources) =>
-        new(new AudioTrackBuffer(trackName, 0, 5), sources.Select(AudioSourceSpec.Parse));
+        Binding(trackName, AppConfig.DefaultProcessGroups, sources);
+
+    private static ProcessTrackBinding Binding(
+        string trackName, IReadOnlyDictionary<string, IReadOnlyList<string>> groups, params string[] sources) =>
+        new(new AudioTrackBuffer(trackName, 0, 5), sources.Select(AudioSourceSpec.Parse), groups);
 
     private static AudioSessionInfo Session(string exe, uint pid = 1234) => new(pid, exe);
 
@@ -110,5 +114,62 @@ public class ProcessTrackBindingTests
         Assert.True(binding.Matches(Session("steamwebhelper.exe")));
         Assert.True(binding.Matches(Session("steam.exe")));
         Assert.False(binding.Matches(Session("notsteam.exe")));
+    }
+
+    private static readonly Dictionary<string, IReadOnlyList<string>> Groups = new()
+    {
+        ["comms"] = ["discord.exe", "telegram.exe"],
+        ["music"] = ["spotify.exe"],
+    };
+
+    [Fact]
+    public void Group_include_matches_every_member()
+    {
+        var binding = Binding("Comms", Groups, "group:comms");
+
+        Assert.True(binding.Matches(Session("discord.exe")));
+        Assert.True(binding.Matches(Session("telegram.exe")));
+        Assert.False(binding.Matches(Session("spotify.exe")));
+    }
+
+    [Fact]
+    public void Group_exclusion_removes_every_member_from_a_catch_all()
+    {
+        var binding = Binding("Game", Groups, "proc:*", "group:!comms", "group:!music");
+
+        Assert.False(binding.Matches(Session("discord.exe")));
+        Assert.False(binding.Matches(Session("telegram.exe")));
+        Assert.False(binding.Matches(Session("spotify.exe")));
+        Assert.True(binding.Matches(Session("game.exe")));
+    }
+
+    [Fact]
+    public void Group_name_lookup_is_case_insensitive()
+    {
+        var binding = Binding("Comms", Groups, "group:COMMS");
+
+        Assert.True(binding.Matches(Session("discord.exe")));
+    }
+
+    [Fact]
+    public void Unknown_group_matches_nothing_instead_of_throwing()
+    {
+        var binding = Binding("Comms", Groups, "group:nonexistent");
+
+        Assert.False(binding.HasRules);
+        Assert.False(binding.Matches(Session("discord.exe")));
+    }
+
+    [Fact]
+    public void Default_process_groups_match_the_shipped_communications_and_music_tracks()
+    {
+        Assert.True(AudioSourceSpec.TryResolveGroup("comms", AppConfig.DefaultProcessGroups, out var comms));
+        Assert.Contains("discord.exe", comms);
+        Assert.Contains("ms-teams.exe", comms);
+        Assert.Contains("slack.exe", comms);
+
+        Assert.True(AudioSourceSpec.TryResolveGroup("music", AppConfig.DefaultProcessGroups, out var music));
+        Assert.Contains("spotify.exe", music);
+        Assert.Contains("foobar2000.exe", music);
     }
 }

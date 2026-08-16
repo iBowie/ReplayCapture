@@ -171,13 +171,29 @@ public sealed class AudioTrackBuffer
         }
     }
 
+    /// <summary>How far below full scale the soft knee in <see cref="ToPcm16"/> starts, linear.</summary>
+    private const double SoftKnee = 0.891; // ~-1 dBFS
+
     /// <summary>
-    /// Converts to 16-bit with a hard clamp. Summing several sources can exceed unity, and wrapping
-    /// on overflow would turn a loud moment into white noise.
+    /// Converts to 16-bit with a soft knee above <see cref="SoftKnee"/> instead of a hard clamp.
+    /// <para>
+    /// Endpoint loopback taps the audio engine's internal float mix bus, which is not itself clamped
+    /// to unity — Windows lets it run hot when several apps (or just system sounds layered on top of
+    /// one) are audible at once, and a single process's own output rarely does this alone. A hard
+    /// clamp turned every one of those overs into an audible digital click; everything below the
+    /// knee is untouched (identical output to the old scale-and-truncate), and only the rare sample
+    /// that would have clipped gets rounded off smoothly instead, asymptotically approaching but
+    /// never reaching the numeric limit.
+    /// </para>
     /// </summary>
     private static short ToPcm16(double sample)
     {
-        var scaled = sample * short.MaxValue;
+        var magnitude = Math.Abs(sample);
+        var limited = magnitude <= SoftKnee
+            ? sample
+            : Math.CopySign(SoftKnee + (1.0 - SoftKnee) * Math.Tanh((magnitude - SoftKnee) / (1.0 - SoftKnee)), sample);
+
+        var scaled = limited * short.MaxValue;
         return scaled switch
         {
             >= short.MaxValue => short.MaxValue,

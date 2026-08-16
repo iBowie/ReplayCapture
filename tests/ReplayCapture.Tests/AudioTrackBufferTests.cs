@@ -68,24 +68,55 @@ public class AudioTrackBufferTests
     }
 
     [Fact]
-    public void Summing_past_full_scale_clamps_instead_of_wrapping()
+    public void Summing_past_full_scale_limits_instead_of_wrapping()
     {
         // Wrapping would turn a loud moment into white noise, which is far worse than clipping.
+        // The soft knee only asymptotically approaches full scale, so this lands a hair under
+        // short.MaxValue rather than exactly on it — the old hard clamp is what used to land exactly
+        // on the boundary, and that hard corner is precisely what produced audible clicks.
         var buffer = NewBuffer();
         for (var i = 0; i < 4; i++) buffer.Accumulate(QpcAtFrame(0), Block(20, 0.5f));
 
         var read = Read(buffer, 0, 20);
 
-        Assert.All(read, sample => Assert.Equal(short.MaxValue, sample));
+        Assert.All(read, sample => Assert.Equal(short.MaxValue, sample, tolerance: 3));
     }
 
     [Fact]
-    public void Negative_overflow_clamps_too()
+    public void Negative_overflow_limits_too()
     {
         var buffer = NewBuffer();
         for (var i = 0; i < 4; i++) buffer.Accumulate(QpcAtFrame(0), Block(20, -0.5f));
 
-        Assert.All(Read(buffer, 0, 20), sample => Assert.Equal(short.MinValue, sample));
+        Assert.All(Read(buffer, 0, 20), sample => Assert.Equal(short.MinValue, sample, tolerance: 3));
+    }
+
+    [Fact]
+    public void A_signal_just_over_full_scale_is_rounded_off_rather_than_slammed_to_the_ceiling()
+    {
+        // Endpoint loopback taps the audio engine's mix bus before it is clamped to unity, so a
+        // system with more than one thing making sound routinely produces samples a little over
+        // 0 dBFS. The old hard clamp turned every one of those into a dead-flat sample at exactly
+        // short.MaxValue; back to back, a run of those is an audible click. The soft knee should
+        // still land close to full scale, but strictly under it.
+        var buffer = NewBuffer();
+        buffer.Accumulate(QpcAtFrame(0), Block(20, 1.05f));
+
+        var read = Read(buffer, 0, 20);
+
+        Assert.All(read, sample => Assert.True(sample < short.MaxValue && sample > short.MaxValue - 500,
+            $"expected a soft-limited value just under full scale, got {sample}"));
+    }
+
+    [Fact]
+    public void A_signal_well_below_the_soft_knee_is_unaffected_by_it()
+    {
+        // Below the knee, conversion must be exactly what a plain scale-and-truncate would produce —
+        // the soft knee exists to catch the rare over, not to colour ordinary audio.
+        var buffer = NewBuffer();
+        buffer.Accumulate(QpcAtFrame(0), Block(20, 0.4f));
+
+        Assert.All(Read(buffer, 0, 20), sample => Assert.Equal((short)(0.4 * short.MaxValue), sample));
     }
 
     [Fact]

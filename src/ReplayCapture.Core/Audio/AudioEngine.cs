@@ -67,10 +67,10 @@ public sealed class AudioEngine : IDisposable
 
             // Process rules are handled as a set, not one at a time: a track's includes and
             // excludes only mean anything when evaluated together.
-            var binding = new ProcessTrackBinding(track, specs);
+            var binding = new ProcessTrackBinding(track, specs, config.ProcessGroups);
             if (binding.HasRules) _bindings.Add(binding);
 
-            foreach (var spec in specs.Where(s => s.Kind != AudioSourceKind.Process))
+            foreach (var spec in specs.Where(s => s.Kind is not AudioSourceKind.Process and not AudioSourceKind.Group))
             {
                 var key = $"{spec.Kind}:{spec.EndpointId ?? "default"}";
                 if (!openSources.TryGetValue(key, out var source))

@@ -71,6 +71,24 @@ public sealed partial class TrackRowViewModel : ObservableObject
     }
 }
 
+public sealed partial class GroupRowViewModel : ObservableObject
+{
+    [ObservableProperty] private string _name = "new-group";
+
+    /// <summary>One executable pattern per line, same free-text convention as track sources.</summary>
+    [ObservableProperty] private string _membersText = "";
+
+    public static GroupRowViewModel From(string name, IReadOnlyList<string> members) => new()
+    {
+        Name = name,
+        MembersText = string.Join(Environment.NewLine, members),
+    };
+
+    public IReadOnlyList<string> Members => MembersText
+        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .ToList();
+}
+
 public sealed partial class SettingsViewModel : ObservableObject
 {
     private readonly AppConfig _original;
@@ -87,11 +105,13 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public ObservableCollection<DisplayRowViewModel> Displays { get; } = [];
     public ObservableCollection<TrackRowViewModel> Tracks { get; } = [];
+    public ObservableCollection<GroupRowViewModel> Groups { get; } = [];
     public ObservableCollection<AudioSessionInfo> RunningAudioProcesses { get; } = [];
 
     public IReadOnlyList<OverlayCorner> OverlayCorners { get; } = Enum.GetValues<OverlayCorner>();
 
     [ObservableProperty] private TrackRowViewModel? _selectedTrack;
+    [ObservableProperty] private GroupRowViewModel? _selectedGroup;
     [ObservableProperty] private AudioSessionInfo? _selectedProcess;
 
     /// <summary>Projected memory footprint, so the cost of a longer buffer is visible before saving.</summary>
@@ -125,6 +145,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         LoadDisplays(config);
         foreach (var track in config.AudioTracks) Tracks.Add(TrackRowViewModel.From(track));
         SelectedTrack = Tracks.FirstOrDefault();
+
+        foreach (var (name, members) in config.ProcessGroups) Groups.Add(GroupRowViewModel.From(name, members));
+        SelectedGroup = Groups.FirstOrDefault();
 
         RefreshProcesses();
     }
@@ -210,6 +233,22 @@ public sealed partial class SettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(EstimatedMemory));
     }
 
+    [RelayCommand]
+    private void AddGroup()
+    {
+        var group = new GroupRowViewModel { Name = $"group{Groups.Count + 1}" };
+        Groups.Add(group);
+        SelectedGroup = group;
+    }
+
+    [RelayCommand]
+    private void RemoveGroup()
+    {
+        if (SelectedGroup is null) return;
+        Groups.Remove(SelectedGroup);
+        SelectedGroup = Groups.FirstOrDefault();
+    }
+
     /// <summary>Builds the new config, or returns null and sets <see cref="ValidationError"/>.</summary>
     public AppConfig? TryBuild()
     {
@@ -254,6 +293,24 @@ public sealed partial class SettingsViewModel : ObservableObject
             return null;
         }
 
+        foreach (var group in Groups)
+        {
+            if (string.IsNullOrWhiteSpace(group.Name) || group.Name.Contains(':'))
+            {
+                ValidationError = $"Group name '{group.Name}' must be non-empty and cannot contain ':'.";
+                return null;
+            }
+        }
+
+        var duplicateGroupName = Groups
+            .GroupBy(g => g.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1)?.Key;
+        if (duplicateGroupName is not null)
+        {
+            ValidationError = $"Group name '{duplicateGroupName}' is used more than once.";
+            return null;
+        }
+
         if (Displays.All(d => !d.Enabled))
         {
             ValidationError = "At least one display must be enabled.";
@@ -274,6 +331,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             MaxRingMemoryMegabytes = Math.Clamp(MaxRingMemoryMegabytes, 256, 32768),
             Displays = [.. Displays.Select(d => d.ToConfig())],
             AudioTracks = [.. Tracks.Select(t => t.ToConfig())],
+            ProcessGroups = Groups.ToDictionary(
+                g => g.Name.Trim(), g => g.Members, StringComparer.OrdinalIgnoreCase),
         };
     }
 }

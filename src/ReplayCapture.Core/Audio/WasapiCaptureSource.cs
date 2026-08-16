@@ -26,8 +26,21 @@ public interface IAudioSource : IDisposable
 /// </summary>
 public sealed unsafe class WasapiCaptureSource : IAudioSource
 {
-    /// <summary>Endpoint buffer length. Low enough for latency, long enough to be safe.</summary>
-    private const long BufferDurationTicks = 20 * TimeSpan.TicksPerMillisecond;
+    /// <summary>
+    /// Endpoint buffer length.
+    /// <para>
+    /// 20 ms is the usual "low latency" choice, but this pipeline never plays audio back live — it
+    /// only reads samples off a QPC-addressed timeline — so latency here buys nothing. A 20 ms
+    /// endpoint buffer gives the poll thread almost no slack: on a machine also NVENC-encoding a
+    /// 200 Hz display, an occasional scheduling delay past 20 ms overruns the endpoint before the
+    /// driver can flag it as a discontinuity, and the lost/corrupted samples come out as clicks in
+    /// the saved file (confirmed by comparing this endpoint's loopback capture against a
+    /// process-loopback capture of the identical audio: the process-loopback device — which is not
+    /// bound to real hardware DMA timing — stayed clean while this one clicked). A much longer
+    /// buffer costs nothing here and gives the poll thread far more room to fall behind.
+    /// </para>
+    /// </summary>
+    private const long BufferDurationTicks = 500 * TimeSpan.TicksPerMillisecond;
 
     // Fixed, documented subformat GUIDs. Spelled out rather than projected because CsWin32's
     // generation of these varies with what else is requested.
@@ -35,6 +48,7 @@ public sealed unsafe class WasapiCaptureSource : IAudioSource
     private static readonly Guid SubtypeIeeeFloat = new("00000003-0000-0010-8000-00AA00389B71");
 
     private readonly WasapiCaptureLoop _loop;
+    private readonly SilentRenderKeepAlive? _keepAlive;
 
     public string Name { get; }
     public bool IsLoopback { get; }
@@ -93,6 +107,13 @@ public sealed unsafe class WasapiCaptureSource : IAudioSource
         _loop = new WasapiCaptureLoop(
             client, (IAudioCaptureClient)captureObject, resampler, name,
             (qpc, samples) => SamplesReady?.Invoke(qpc, samples));
+
+        // Loopback only: keeps the shared audio engine from idling between sounds, which is what
+        // was producing an audible pop on this endpoint every time it woke back up (confirmed by
+        // comparing against a process-loopback capture of the same audio, which has no such engine
+        // to idle and stayed clean at the exact same timestamps). Capture-mode sources don't tap a
+        // render engine at all, so there is nothing here for them to keep awake.
+        if (loopback) _keepAlive = new SilentRenderKeepAlive(device);
     }
 
     /// <summary>Maps the endpoint's mix format onto the FFmpeg sample format the resampler wants.</summary>
@@ -121,9 +142,19 @@ public sealed unsafe class WasapiCaptureSource : IAudioSource
         };
     }
 
-    public void Start() => _loop.Start();
+    public void Start()
+    {
+        // Started first: the loopback capture should never see the "engine cold-starting" glitch
+        // this exists to prevent, not even for the first sound after Start.
+        _keepAlive?.Start();
+        _loop.Start();
+    }
 
-    public void Dispose() => _loop.Dispose();
+    public void Dispose()
+    {
+        _loop.Dispose();
+        _keepAlive?.Dispose();
+    }
 }
 
 internal static class Constants

@@ -122,7 +122,8 @@ static void Record(int seconds, string outputDirectory)
                       $"{session.Audio.TotalBytes / (1024 * 1024),4} MB audio  " +
                       $"encoded {recorder.FramesEncoded,5}  " +
                       $"dup {recorder.DuplicateFrames,5}  " +
-                      $"late {recorder.LateTicks,3}");
+                      $"late {recorder.LateTicks,3}  " +
+                      $"skip {recorder.FramesSkippedForDrift,3}");
     }
 
     Console.WriteLine("\n");
@@ -314,6 +315,7 @@ static void Benchmark(int seconds)
     Console.WriteLine($"    frame rate accuracy   {100.0 * framesEncoded / expectedFrames,6:F2} %");
     Console.WriteLine($"    duplicate frames      {duplicates,6}  (unchanged screen; near-free P-frames)");
     Console.WriteLine($"    late pacer ticks      {recorder.LateTicks,6}");
+    Console.WriteLine($"    frames skipped(drift) {recorder.FramesSkippedForDrift,6}  (nonzero => target fps not sustainable)");
     Console.WriteLine($"    seconds buffered      {recorder.SecondsBuffered,6:F1}");
     Console.WriteLine();
 }
@@ -389,7 +391,7 @@ static void ListAudioSessions()
             .Where(t => t.Enabled)
             .Where(t =>
             {
-                var process = t.ParsedSources.Where(s => s.Kind == ReplayCapture.Core.Config.AudioSourceKind.Process).ToList();
+                var process = ExpandProcessSpecs(t.Name, t.ParsedSources);
                 var includes = process.Where(s => !s.IsExclusion);
                 var excludes = process.Where(s => s.IsExclusion);
                 return includes.Any(s => s.MatchesProcess(session.ExecutableName))
@@ -413,9 +415,8 @@ static void ListAudioSessions()
     // Static check across the whole config, not just what happens to be running right now.
     Console.WriteLine("\n  config check:");
     var named = tracks
-        .SelectMany(t => t.ParsedSources
-            .Where(s => s.Kind == ReplayCapture.Core.Config.AudioSourceKind.Process
-                        && !s.IsExclusion && s.ProcessPattern != "*")
+        .SelectMany(t => ExpandProcessSpecs(t.Name, t.ParsedSources)
+            .Where(s => !s.IsExclusion && s.ProcessPattern != "*")
             .Select(s => (Track: t.Name, Pattern: s.ProcessPattern!)))
         .ToList();
 
@@ -424,7 +425,7 @@ static void ListAudioSessions()
     {
         foreach (var other in tracks.Where(t => t.Name != track))
         {
-            var otherSpecs = other.ParsedSources.Where(s => s.Kind == ReplayCapture.Core.Config.AudioSourceKind.Process).ToList();
+            var otherSpecs = ExpandProcessSpecs(other.Name, other.ParsedSources);
             var catchAll = otherSpecs.Any(s => !s.IsExclusion && s.ProcessPattern == "*");
             if (!catchAll) continue;
 
@@ -439,6 +440,40 @@ static void ListAudioSessions()
     Console.WriteLine(problems == 0
         ? "    ok - no app can land on two tracks at once"
         : $"    {problems} problem(s) - add the missing proc:! exclusions");
+
+    // Expands proc: specs as-is and group: specs into their member proc: specs, so the checks above
+    // see what a track actually matches at runtime rather than missing anything behind a group:.
+    List<ReplayCapture.Core.Config.AudioSourceSpec> ExpandProcessSpecs(
+        string trackName, IEnumerable<ReplayCapture.Core.Config.AudioSourceSpec> sources)
+    {
+        var result = new List<ReplayCapture.Core.Config.AudioSourceSpec>();
+        foreach (var spec in sources)
+        {
+            if (spec.Kind == ReplayCapture.Core.Config.AudioSourceKind.Process)
+            {
+                result.Add(spec);
+                continue;
+            }
+
+            if (spec.Kind != ReplayCapture.Core.Config.AudioSourceKind.Group) continue;
+
+            if (!ReplayCapture.Core.Config.AudioSourceSpec.TryResolveGroup(spec.GroupName!, config.ProcessGroups, out var members))
+            {
+                Console.WriteLine($"    unknown process group '{spec.GroupName}' on '{trackName}' ('{spec.Raw}')");
+                continue;
+            }
+
+            result.AddRange(members.Select(pattern => new ReplayCapture.Core.Config.AudioSourceSpec
+            {
+                Kind = ReplayCapture.Core.Config.AudioSourceKind.Process,
+                ProcessPattern = pattern,
+                IsExclusion = spec.IsExclusion,
+                Raw = spec.Raw,
+            }));
+        }
+
+        return result;
+    }
 
     Console.WriteLine();
 }

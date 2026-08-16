@@ -62,12 +62,23 @@ muxer writes a seventh track.
 | `proc:spotify.exe` | Include this process and its child tree |
 | `proc:!discord.exe` | Exclude this process |
 | `proc:*` | Include everything; combine with exclusions for an "everything else" stem |
+| `group:comms` | Include every process named in the `comms` entry of `ProcessGroups` |
+| `group:!comms` | Exclude every process in that group |
 
 Executable patterns accept `*` and `?` and match case-insensitively.
 
+`group:` is shorthand for listing several `proc:` rules — instead of `proc:discord.exe`,
+`proc:ms-teams.exe`, `proc:slack.exe` on one track and `proc:!discord.exe`, `proc:!ms-teams.exe`,
+`proc:!slack.exe` on the `proc:*` catch-all, both sides can say `group:comms` / `group:!comms`.
+Groups are defined by name in `AppConfig.ProcessGroups` (`config.json`'s `processGroups` key),
+looked up case-insensitively; ships with `comms` and `music` matching the default track layout. A
+`group:` rule naming an unknown group is skipped with a logged warning rather than failing to load.
+
 Any process named on one track must be excluded from `proc:*` tracks, or its audio lands on two
 stems at once. `AppConfigTests.Game_track_captures_everything_not_claimed_elsewhere` enforces this
-for the shipped defaults.
+for the shipped defaults, and `rcprobe sessions`' config check expands `group:` the same way the
+live rules engine does, so it catches a missing exclusion whether it's spelled as `proc:!x` or
+`group:!x`.
 
 ## Status
 

@@ -68,12 +68,50 @@ public class AudioSourceSpecTests
     }
 
     [Theory]
+    [InlineData("group:comms", "comms", false)]
+    [InlineData("group:!comms", "comms", true)]
+    public void Parses_group_specs(string input, string expectedName, bool expectedExclusion)
+    {
+        var spec = AudioSourceSpec.Parse(input);
+
+        Assert.Equal(AudioSourceKind.Group, spec.Kind);
+        Assert.Equal(expectedName, spec.GroupName);
+        Assert.Equal(expectedExclusion, spec.IsExclusion);
+    }
+
+    [Fact]
+    public void Group_specs_never_match_processes_directly()
+    {
+        // Resolving a group name needs the group table, which this type has no reference to;
+        // ProcessTrackBinding expands group: specs into proc: specs before matching.
+        Assert.False(AudioSourceSpec.Parse("group:comms").MatchesProcess("discord.exe"));
+    }
+
+    [Fact]
+    public void Resolves_group_members_case_insensitively()
+    {
+        var groups = new Dictionary<string, IReadOnlyList<string>> { ["Comms"] = ["discord.exe"] };
+
+        Assert.True(AudioSourceSpec.TryResolveGroup("comms", groups, out var members));
+        Assert.Equal(["discord.exe"], members);
+    }
+
+    [Fact]
+    public void Unknown_group_fails_to_resolve()
+    {
+        Assert.False(AudioSourceSpec.TryResolveGroup("nonexistent", AppConfig.DefaultProcessGroups, out var members));
+        Assert.Empty(members);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("device:render")]              // missing endpoint segment
     [InlineData("device:sideways:default")]    // unknown flow
     [InlineData("proc:")]                      // no executable
     [InlineData("proc:!")]                     // exclusion with no executable
+    [InlineData("group:")]                     // no group name
+    [InlineData("group:!")]                    // exclusion with no group name
     [InlineData("window:notepad.exe")]         // unknown prefix
     public void Rejects_malformed_specs(string input)
     {

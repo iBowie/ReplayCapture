@@ -105,4 +105,22 @@ public class AppConfigTests
     {
         Assert.Empty(new AppConfig().Displays);
     }
+
+    [Fact]
+    public void Process_groups_round_trip_through_json()
+    {
+        var config = new AppConfig
+        {
+            ProcessGroups = new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["comms"] = ["discord.exe", "telegram.exe"],
+            },
+        };
+
+        var restored = JsonSerializer.Deserialize<AppConfig>(
+            JsonSerializer.Serialize(config, Options), Options)!;
+
+        Assert.True(AudioSourceSpec.TryResolveGroup("comms", restored.ProcessGroups, out var members));
+        Assert.Equal(["discord.exe", "telegram.exe"], members);
+    }
 }

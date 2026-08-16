@@ -27,13 +27,44 @@ internal sealed class ProcessTrackBinding : IDisposable
     public int AttachedCount => _attached.Count;
     public IEnumerable<string> AttachedNames => _attached.Values.Select(s => s.Name);
 
-    public ProcessTrackBinding(AudioTrackBuffer track, IEnumerable<AudioSourceSpec> specs)
+    public ProcessTrackBinding(
+        AudioTrackBuffer track,
+        IEnumerable<AudioSourceSpec> specs,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? processGroups = null)
     {
         _track = track;
 
-        var processSpecs = specs.Where(s => s.Kind == AudioSourceKind.Process).ToList();
+        var processSpecs = specs
+            .Where(s => s.Kind is AudioSourceKind.Process or AudioSourceKind.Group)
+            .SelectMany(s => ExpandGroup(s, processGroups, track.Name))
+            .ToList();
         _includes = processSpecs.Where(s => !s.IsExclusion).ToList();
         _excludes = processSpecs.Where(s => s.IsExclusion).ToList();
+    }
+
+    /// <summary>
+    /// Turns a <c>group:</c> spec into one <c>proc:</c>-equivalent spec per member, preserving
+    /// whether the group itself was an inclusion or an exclusion. <c>proc:</c> specs pass through
+    /// unchanged.
+    /// </summary>
+    private static IEnumerable<AudioSourceSpec> ExpandGroup(
+        AudioSourceSpec spec, IReadOnlyDictionary<string, IReadOnlyList<string>>? processGroups, string trackName)
+    {
+        if (spec.Kind != AudioSourceKind.Group) return [spec];
+
+        if (!AudioSourceSpec.TryResolveGroup(spec.GroupName!, processGroups, out var members))
+        {
+            Log.Warn($"Track '{trackName}': unknown process group '{spec.GroupName}' in '{spec.Raw}'.");
+            return [];
+        }
+
+        return members.Select(pattern => new AudioSourceSpec
+        {
+            Kind = AudioSourceKind.Process,
+            ProcessPattern = pattern,
+            IsExclusion = spec.IsExclusion,
+            Raw = spec.Raw,
+        });
     }
 
     public bool HasRules => _includes.Count > 0;

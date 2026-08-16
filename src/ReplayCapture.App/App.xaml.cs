@@ -2,6 +2,7 @@ using System.IO; // WPF's implicit usings omit System.IO (System.Windows.Shapes.
 using System.Media;
 using System.Windows;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using ReplayCapture.App.Input;
 using ReplayCapture.App.Overlay;
 using ReplayCapture.App.Startup;
@@ -17,6 +18,13 @@ namespace ReplayCapture.App;
 public partial class App : Application
 {
     private const string SingleInstanceMutexName = @"Global\ReplayCapture.SingleInstance";
+
+    /// <summary>
+    /// How long to wait after a resume-from-sleep notification before rebuilding capture. Drivers
+    /// for the GPU and audio endpoints are not necessarily ready the instant Windows reports resume,
+    /// and probing them too early just reproduces the failure we are trying to recover from.
+    /// </summary>
+    private static readonly TimeSpan ResumeSettleDelay = TimeSpan.FromSeconds(3);
 
     private Mutex? _singleInstance;
     private ConfigStore _configStore = null!;
@@ -75,6 +83,12 @@ public partial class App : Application
         SyncStartupTask();
         WarnIfNotElevated();
         CreateIndicator();
+
+        // The app must never keep the machine awake or the display on, and must come back cleanly
+        // once it sleeps: SystemEvents fires this on its own hidden-window thread, so resume is
+        // never missed even though the pacer and capture threads are themselves frozen for the
+        // duration of the sleep.
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _statusTimer.Tick += (_, _) => UpdateStatus();
@@ -151,22 +165,42 @@ public partial class App : Application
     /// The session detected something it cannot heal in place — a lost GPU or a changed set of
     /// displays. Rebuild it rather than leaving a dead buffer that still looks armed.
     /// </summary>
-    private void OnRecoveryRequired(string reason)
-    {
-        Dispatcher.InvokeAsync(() =>
-        {
-            if (_saveInProgress != 0)
-            {
-                // Let an in-flight write finish; the watchdog is not going anywhere.
-                Log.Info("Deferring capture rebuild until the current save completes.");
-                return;
-            }
+    private void OnRecoveryRequired(string reason) => Dispatcher.InvokeAsync(() => RebuildCapture(reason));
 
-            Log.Warn($"Rebuilding capture: {reason}.");
-            _tray?.Notify("Capture restarted", $"{char.ToUpperInvariant(reason[0])}{reason[1..]}.");
-            _indicator?.ShowIdle("restarting…");
-            RestartSession();
-        });
+    /// <summary>
+    /// The system woke from sleep. GPU device loss and closed capture items are already caught by
+    /// the watchdog, but WASAPI endpoints invalidated by sleep are not — a dead audio client just
+    /// spins on the same error forever rather than reporting itself as lost. Rebuilding unconditionally
+    /// on resume replaces every endpoint and capture item with fresh ones instead of waiting to see
+    /// which parts of the pipeline sleep actually broke.
+    /// </summary>
+    private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != PowerModes.Resume) return;
+
+        Log.Info("System resumed from sleep; capture will rebuild shortly.");
+        Task.Delay(ResumeSettleDelay).ContinueWith(
+            _ => Dispatcher.InvokeAsync(() => RebuildCapture("the system resumed from sleep")),
+            TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Tears the session down and starts a fresh one. Deferred rather than forced when a save is
+    /// in flight, because that save is reading ring buffers the rebuild would dispose out from
+    /// under it; the watchdog keeps re-checking, so a deferred rebuild is not lost, only delayed.
+    /// </summary>
+    private void RebuildCapture(string reason)
+    {
+        if (_saveInProgress != 0)
+        {
+            Log.Info($"Deferring capture rebuild ({reason}) until the current save completes.");
+            return;
+        }
+
+        Log.Warn($"Rebuilding capture: {reason}.");
+        _tray?.Notify("Capture restarted", $"{char.ToUpperInvariant(reason[0])}{reason[1..]}.");
+        _indicator?.ShowIdle("restarting…");
+        RestartSession();
     }
 
     private void UpdateStatus()
@@ -424,6 +458,7 @@ public partial class App : Application
     {
         Log.Info("ReplayCapture shutting down.");
 
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _statusTimer?.Stop();
         _hotkeys?.Dispose();
         _session?.Dispose();
