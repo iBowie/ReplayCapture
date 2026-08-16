@@ -9,7 +9,7 @@
           Elevation is a hard requirement, not a convenience. UIPI drops both RegisterHotKey
           delivery and WH_KEYBOARD_LL events when a higher-integrity window holds focus, so a
           medium-integrity process simply cannot see Alt+F10 while an elevated app is in front.
-          Running elevated also lets Windows.Graphics.Capture see elevated windows.
+          Running elevated also lets DXGI Desktop Duplication see elevated windows' content.
           StartupTaskInstaller registers a scheduled task so this costs no UAC prompt at logon.
         -->
         <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />

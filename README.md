@@ -9,7 +9,7 @@ and an arbitrary number of separate audio stems.
 | | |
 |---|---|
 | Stack | C# on `net10.0-windows10.0.26100.0`, x64 only |
-| Capture | Windows.Graphics.Capture, one session per display |
+| Capture | Raw DXGI Desktop Duplication (`IDXGIOutputDuplication`), one session per display |
 | Colour convert | `ID3D11VideoProcessor` (fixed-function BGRA→NV12, BT.709 limited range) |
 | Encode | NVENC `h264_nvenc` via Sdcb.FFmpeg, sharing the capture `ID3D11Device` |
 | Container | **`.mov`**, one file per display, each carrying every audio track |
@@ -30,7 +30,7 @@ To avoid a UAC prompt on every boot, `StartupTaskInstaller` registers a Task Sch
 (logon trigger, `RunLevel=HighestAvailable`, 20 s delay) rather than a Run-key or Startup-folder
 shortcut, neither of which can launch elevated silently.
 
-Elevation is also what lets Windows.Graphics.Capture see elevated windows.
+Elevation is also what lets DXGI Desktop Duplication see elevated windows' content.
 
 ## Build and test
 
@@ -131,8 +131,8 @@ rcprobe sessions
 `sessions` shows every process currently holding an audio session and which track the rules assign
 it to — the fastest way to check a config change did what you meant, without starting a capture.
 
-`rcprobe capture 3` exercises WGC and the NV12 converter without touching the encoder, which is
-where to start if frames stop arriving.
+`rcprobe capture 3` exercises Desktop Duplication and the NV12 converter without touching the
+encoder, which is where to start if frames stop arriving.
 
 ### Verified on this machine
 
@@ -196,7 +196,7 @@ A watchdog in `ReplaySession` checks every 3 s for a lost GPU (driver update, TD
 appearing or disappearing, and raises `RecoveryRequired` — the app rebuilds the session in response,
 deferring if a save is in flight.
 
-### Four bugs worth remembering
+### Six bugs worth remembering
 
 **Divide a shared budget by what you actually built, not by what config asked for.** The ring memory
 cap was split across `config.Displays.Count(d => d.Enabled)`. A default config names no displays at
@@ -210,13 +210,47 @@ control containing a MultiBinding is realised — which took down the tray conte
 first right-click. WPF's binding engine calls `XmlLanguage.GetSpecificCulture()` and needs real ICU
 data. Caught for good by `--selftest`.
 
-**CsWinRT objects are not COM RCWs.** Casting an `IDirect3DSurface` to a `[ComImport]`
-`IDirect3DDxgiInterfaceAccess` throws `InvalidCastException`; the interface has to be reached with
-an explicit `QueryInterface` on the native pointer and a vtable call. See `Direct3DInterop`.
+**CsWinRT objects are not COM RCWs.** A WinRT object handed out by CsWinRT cannot be cast straight
+to a `[ComImport]` interface — that throws `InvalidCastException`; the interface has to be reached
+with an explicit `QueryInterface` on the native pointer and a vtable call. See
+`ProcessLoopbackSource`'s hand-declared `IActivateAudioInterfaceCompletionHandler` interop, which is
+the one place left in this codebase that still does this.
 
 **Round, don't floor, when converting ticks to sample frames.** One frame at 48 kHz is 208.33 ticks,
 so flooring places every audio block up to 20.8 µs late and breaks the frame↔tick round trip
 (frame 1 → 208 ticks → frame 0). See `AudioFormat.TicksToFrames`.
+
+**Windows.Graphics.Capture can cap frame delivery well below a display's native refresh, for reasons
+outside this app's control.** On a 200 Hz display, WGC's `Direct3D11CaptureFramePool` was measured
+delivering only **~50 frames/sec** — identical at idle and under full game load, and unchanged by
+raising `numberOfBuffers` from 2 to 8. That ruled out both GPU contention and frame-pool starvation
+as the cause: the ceiling lives inside WGC's own frame-pool/compositor layer. Raw
+`IDXGIOutputDuplication` on the *same* device, *same* monitor, delivered **~207 frames/sec** — right
+at native refresh — which is why `DisplayCaptureSource` is built on Desktop Duplication rather than
+WGC. The cost is that Desktop Duplication hands back the cursor as separate shape/position metadata
+instead of compositing it into the frame, so `DisplayCaptureSource` draws it back in with
+`CursorOverlay`, a GPU alpha-blend quad (see the next entry for why it isn't a CPU blend).
+
+**A blocking `IDXGIOutputDuplication::AcquireNextFrame` starves every other thread sharing the
+device, even at a few milliseconds.** Fixing the WGC cap above created a second, worse problem: two
+displays' capture threads and two encoder threads all share one `D3DContext` device
+(`SetMultithreadProtected`-serialized), and giving `AcquireNextFrame` even an 8 ms timeout was enough
+to make the encoder miss its schedule so badly the pacer had to skip frame indices to resync —
+measured encoding as few as **~230 of an expected 1200 frames** in 20 s at a 60fps target. Several
+plausible-looking fixes were tried and each helped only partially: double-buffering the capture latch
+(a single texture written ~200/s and read by the encoder's `VideoProcessorBlt` does force a real GPU
+read/write hazard, but wasn't the dominant cost), and moving cursor compositing off a CPU
+`Map(ReadWrite)` onto a GPU blend (`CursorOverlay`) — the first cursor implementation read the
+just-captured region back to a CPU-mapped staging texture to handle Desktop Duplication's monochrome
+AND/XOR and masked-color AND-mask/XOR-color cursor data faithfully (including the genuine "invert"
+pixel combination, which needs the real destination pixel), and that CPU map measurably stalled the
+whole pipeline on its own. Both fixes are still in place and still worth having, but neither came
+close to solving it. The actual fix was polling `AcquireNextFrame` with a **zero** timeout and
+sleeping on a plain `Thread.Sleep(1)` — which touches no D3D11 object at all — whenever nothing was
+ready: **100% frame-rate accuracy, 0 late ticks, 0 drift-skips** on both displays under real game
+load. `CursorOverlay`'s GPU blend can't reproduce that rare "invert" pixel (it never reads the
+destination), so it renders those transparent instead — a legacy combination essentially absent from
+modern cursor themes.
 
 **Trim one GOP later than feels natural.** Dropping the leading GOP the moment its own keyframe
 ages out leaves the buffer starting at a keyframe *newer* than the cutoff, so saves come out short

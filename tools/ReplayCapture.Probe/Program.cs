@@ -37,6 +37,10 @@ switch (command)
         Benchmark(args.Length > 1 ? int.Parse(args[1]) : 20);
         break;
 
+    case "benchreal":
+        BenchmarkRealConfig(args.Length > 1 ? int.Parse(args[1]) : 20);
+        break;
+
     case "rebuild":
         RebuildTest();
         break;
@@ -52,6 +56,7 @@ switch (command)
               record [secs] [outDir]
                                 Run the full pipeline and write one .mov per display
               bench [secs]      Measure the always-on overhead against an idle baseline
+              benchreal [secs]  Same, but against the actual saved config.json and every display
               rebuild           Force an encoder rebuild mid-capture and check recovery
             """);
         break;
@@ -200,7 +205,7 @@ static void CaptureSmokeTest(double seconds)
 
     d3d.ImmediateContext.Flush();
 
-    Console.WriteLine($"  frames delivered by WGC : {capture.FramesArrived}");
+    Console.WriteLine($"  frames delivered        : {capture.FramesArrived}");
     Console.WriteLine($"  NV12 conversions done   : {converted}");
     Console.WriteLine($"  ticks with no frame yet : {missed}");
     Console.WriteLine($"  capture timestamp span  : {ReplayCapture.Core.Timing.Clock.ToSeconds(lastQpc - firstQpc):0.000}s");
@@ -318,6 +323,41 @@ static void Benchmark(int seconds)
     Console.WriteLine($"    frames skipped(drift) {recorder.FramesSkippedForDrift,6}  (nonzero => target fps not sustainable)");
     Console.WriteLine($"    seconds buffered      {recorder.SecondsBuffered,6:F1}");
     Console.WriteLine();
+}
+
+static void BenchmarkRealConfig(int seconds)
+{
+    var config = new ReplayCapture.Core.Config.ConfigStore().Load();
+    using var session = new ReplayCapture.Core.ReplaySession(config);
+    session.Start();
+
+    Console.WriteLine($"Warming up, then sampling for {seconds}s…\n");
+    Thread.Sleep(3000);
+
+    var before = session.Recorders.Select(r => (r.FramesEncoded, r.DuplicateFrames, r.LateTicks, r.FramesSkippedForDrift, r.FramesArrived)).ToArray();
+    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+    Thread.Sleep(seconds * 1000);
+    stopwatch.Stop();
+
+    for (var i = 0; i < session.Recorders.Count; i++)
+    {
+        var r = session.Recorders[i];
+        var (framesEncodedBefore, dupBefore, lateBefore, skipBefore, arrivedBefore) = before[i];
+        var framesEncoded = r.FramesEncoded - framesEncodedBefore;
+        var dup = r.DuplicateFrames - dupBefore;
+        var late = r.LateTicks - lateBefore;
+        var skip = r.FramesSkippedForDrift - skipBefore;
+        var arrived = r.FramesArrived - arrivedBefore;
+        var expected = stopwatch.Elapsed.TotalSeconds * r.FramesPerSecond;
+
+        Console.WriteLine($"{r.Display.DeviceName} target={r.FramesPerSecond}fps native={r.Display.RefreshHz}Hz");
+        Console.WriteLine($"    frames arrived        {arrived,6}  ({arrived / stopwatch.Elapsed.TotalSeconds:F1}/s)");
+        Console.WriteLine($"    frames encoded        {framesEncoded,6}  (expected ~{expected:F0})");
+        Console.WriteLine($"    duplicate frames      {dup,6}  ({100.0 * dup / Math.Max(1, framesEncoded):F1}% of encoded)");
+        Console.WriteLine($"    late pacer ticks      {late,6}");
+        Console.WriteLine($"    frames skipped(drift) {skip,6}");
+        Console.WriteLine();
+    }
 }
 
 static GpuSample SampleGpu(TimeSpan duration)

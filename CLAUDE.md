@@ -8,7 +8,7 @@ ReplayCapture is a ShadowPlay-style instant-replay tool for Windows: it keeps th
 of every display in memory continuously and writes it to disk on Alt+F10, one `.mov` per display,
 each carrying an arbitrary number of separate audio stems. C# on `net10.0-windows10.0.26100.0`,
 x64-only (NVENC, D3D11, and the FFmpeg native runtime are all x64-only). See `README.md` for the
-full design rationale, audio-source grammar, verified hardware behavior, and a "four bugs worth
+full design rationale, audio-source grammar, verified hardware behavior, and a "six bugs worth
 remembering" section — read it before touching capture, encoding, muxing, or audio-routing code.
 
 ## Build and test
@@ -36,7 +36,9 @@ ReplayCapture.exe --selftest
 stages without launching the elevated tray app: `rcprobe displays`, `rcprobe capture <n>`,
 `rcprobe record <seconds> <outDir>`, `rcprobe audio`, `rcprobe sessions` (shows which track each
 live audio session would be assigned to — the fast way to check a config change), `rcprobe bench
-<seconds>`, `rcprobe rebuild` (exercises the resolution-change recovery path).
+<seconds>` (synthetic config), `rcprobe benchreal <seconds>` (the actual saved `config.json`, every
+display — per-display frame accuracy/late-tick/drift diagnostics), `rcprobe rebuild` (exercises the
+resolution-change recovery path).
 
 `Directory.Build.props` fixes `InvariantGlobalization=false` for every project — never turn this on;
 see the comment there and the README's bug writeup for why it takes down WPF's binding engine.
@@ -56,7 +58,7 @@ internal but is exactly the logic worth testing).
   everything attached"), the 3-second watchdog that detects a lost GPU or a changed display set and
   raises `RecoveryRequired`, and `Save()`, which snapshots every recorder's ring buffer and the audio
   engine and muxes them into aligned `.mov` files sharing one origin timestamp.
-- `DisplayRecorder` is one display's full pipeline: `DisplayCaptureSource` (Windows.Graphics.Capture)
+- `DisplayRecorder` is one display's full pipeline: `DisplayCaptureSource` (DXGI Desktop Duplication)
   → `FramePacer` (paces ticks to the configured fps, inventing duplicate frames rather than stalling)
   → `NvencVideoEncoder` → `PacketRingBuffer`. A resolution change sets `_rebuildRequested`; the pacer
   rebuilds capture + encoder on its next tick and **discards** the ring buffer, because H.264

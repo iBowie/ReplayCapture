@@ -13,6 +13,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Precompiled at build time is unnecessary here — fxc output is checked in directly since the
+         cursor-blit shader never changes. Compiling via D3DCompiler at runtime would just add a
+         native dependency for no benefit. -->
+    <EmbeddedResource Include="Capture\Shaders\CursorBlitVS.cso" LogicalName="ReplayCapture.Core.Capture.Shaders.CursorBlitVS.cso" />
+    <EmbeddedResource Include="Capture\Shaders\CursorBlitPS.cso" LogicalName="ReplayCapture.Core.Capture.Shaders.CursorBlitPS.cso" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Sdcb.FFmpeg" Version="7.0.0" />
     <PackageReference Include="Sdcb.FFmpeg.runtime.windows-x64" Version="7.1.0" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
