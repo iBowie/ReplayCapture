@@ -89,6 +89,17 @@ public sealed partial class GroupRowViewModel : ObservableObject
         .ToList();
 }
 
+/// <summary>
+/// One entry in the running-processes picker: the raw session plus a preview of which track(s) it
+/// currently resolves to, given the in-progress (possibly unsaved) track and group edits.
+/// </summary>
+public sealed record ProcessRouteRow(AudioSessionInfo Session, string RouteDescription)
+{
+    public string ExecutableName => Session.ExecutableName;
+
+    public override string ToString() => $"{Session}  →  {RouteDescription}";
+}
+
 public sealed partial class SettingsViewModel : ObservableObject
 {
     private readonly AppConfig _original;
@@ -108,7 +119,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public ObservableCollection<DisplayRowViewModel> Displays { get; } = [];
     public ObservableCollection<TrackRowViewModel> Tracks { get; } = [];
     public ObservableCollection<GroupRowViewModel> Groups { get; } = [];
-    public ObservableCollection<AudioSessionInfo> RunningAudioProcesses { get; } = [];
+    public ObservableCollection<ProcessRouteRow> RunningAudioProcesses { get; } = [];
 
     public IReadOnlyList<OverlayCorner> OverlayCorners { get; } = Enum.GetValues<OverlayCorner>();
     public IReadOnlyList<CaptureBackend> CaptureBackends { get; } = Enum.GetValues<CaptureBackend>();
@@ -116,7 +127,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty] private TrackRowViewModel? _selectedTrack;
     [ObservableProperty] private GroupRowViewModel? _selectedGroup;
-    [ObservableProperty] private AudioSessionInfo? _selectedProcess;
+    [ObservableProperty] private ProcessRouteRow? _selectedProcess;
 
     /// <summary>Projected memory footprint, so the cost of a longer buffer is visible before saving.</summary>
     public string EstimatedMemory
@@ -179,12 +190,38 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnBufferSecondsChanged(int value) => OnPropertyChanged(nameof(EstimatedMemory));
 
+    /// <summary>
+    /// Re-lists processes currently holding an audio session and, for each, previews which track(s)
+    /// it would land on given the tracks and groups as currently edited (not yet saved). Click this
+    /// again after editing a track's sources to see the effect.
+    /// </summary>
     [RelayCommand]
     private void RefreshProcesses()
     {
+        var previousSelection = SelectedProcess?.ExecutableName;
+
+        var tracks = Tracks.Select(t => t.ToConfig()).ToList();
+        var groups = Groups.ToDictionary(g => g.Name.Trim(), g => g.Members, StringComparer.OrdinalIgnoreCase);
+
         RunningAudioProcesses.Clear();
         foreach (var session in AudioSessionMonitor.ListActiveSessions().OrderBy(s => s.ExecutableName))
-            RunningAudioProcesses.Add(session);
+        {
+            var matches = ProcessTrackRouter.ResolveTrackNames(session.ExecutableName, tracks, groups);
+            var description = matches.Count switch
+            {
+                0 => "not captured",
+                1 => matches[0],
+                // Landing on two tracks means the same audio is duplicated across stems, which is
+                // almost always a missing exclusion rather than an intent.
+                _ => $"{string.Join(", ", matches)} — duplicated",
+            };
+
+            RunningAudioProcesses.Add(new ProcessRouteRow(session, description));
+        }
+
+        SelectedProcess = RunningAudioProcesses.FirstOrDefault(p =>
+            string.Equals(p.ExecutableName, previousSelection, StringComparison.OrdinalIgnoreCase))
+            ?? RunningAudioProcesses.FirstOrDefault();
     }
 
     /// <summary>Adds the picked process to the selected track as an include rule.</summary>
@@ -200,6 +237,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         SelectedTrack.SourcesText = string.IsNullOrWhiteSpace(existing)
             ? rule
             : existing.TrimEnd() + Environment.NewLine + rule;
+
+        RefreshProcesses();
     }
 
     /// <summary>
@@ -219,6 +258,8 @@ public sealed partial class SettingsViewModel : ObservableObject
 
             track.SourcesText = track.SourcesText.TrimEnd() + Environment.NewLine + rule;
         }
+
+        RefreshProcesses();
     }
 
     [RelayCommand]
