@@ -65,10 +65,16 @@ internal but is exactly the logic worth testing).
   `DisplayCaptureSourceFactory` per `AppConfig.CaptureBackend` — DXGI Desktop Duplication by default,
   or Windows.Graphics.Capture; see the README's capture-backend section for the trade-off)
   → `FramePacer` (paces ticks to the configured fps, inventing duplicate frames rather than stalling)
-  → `NvencVideoEncoder` → `PacketRingBuffer`. A resolution change sets `_rebuildRequested`; the pacer
-  rebuilds capture + encoder on its next tick and **discards** the ring buffer, because H.264
-  parameter sets are dimension-specific and mixing pre/post-resize packets would produce an
-  unreadable file.
+  → `NvencVideoEncoder` → `PacketRingBuffer`. Each display's encode resolution is fixed for the
+  recorder's whole lifetime — either the display's native size at construction, or an explicit
+  `DisplayConfig.CaptureWidth`/`CaptureHeight` override; a resolution change sets `_resizeRequested`,
+  and the pacer re-provisions capture at its new native size and calls
+  `IVideoEncoder.NotifySourceResized` on its next tick — the encoder's GPU video processor
+  (`Nv12Converter`) scales into the fixed encode size as part of the colour conversion it already
+  does, so neither the codec nor the ring buffer is ever torn down for a resolution change. A display
+  with nothing to offer (`IDisplayCaptureSource.TryGetLatest` returns false — no frame has arrived
+  yet, or the display is temporarily unavailable) gets `IDisplayCaptureSource.BlackFrame` encoded
+  instead of the tick being skipped, so a saved clip never has a silent gap.
 - `AudioEngine` (`Audio/`) owns every configured `AudioTrackConfig`, each backed by one or more
   sources resolved from `AudioSourceSpec` (device loopback, mic capture, per-process loopback, or a
   named group from `AppConfig.ProcessGroups`). `AudioSessionMonitor` enumerates only processes that
@@ -84,7 +90,9 @@ internal but is exactly the logic worth testing).
   per-track audio all line up on one timeline at save time with no manual offset.
 - `Config/ConfigStore` reads/writes `%APPDATA%\ReplayCapture\config.json`; `AppConfig` documents
   every field's default and why (e.g. `MaxRingMemoryMegabytes` is divided by displays *actually
-  captured*, not displays *named in config*, per the README bug writeup).
+  captured*, not displays *named in config*, per the README bug writeup). `DisplayConfig.CaptureWidth`/
+  `CaptureHeight` (both or neither — a lone value is ignored) pin a display's encode resolution
+  independent of its actual native size; see `DisplayRecorder` above.
 
 ### App shell
 

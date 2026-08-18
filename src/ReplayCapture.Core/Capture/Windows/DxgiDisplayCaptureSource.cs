@@ -105,7 +105,7 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
         Display = display;
         _cursorOverlay = new CursorOverlay(d3d);
 
-        _duplication = Duplicate();
+        _duplication = AcquireDuplication();
         var desc = _duplication.Description;
         ContentSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
 
@@ -211,36 +211,61 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
     {
         _duplication.Dispose();
 
+        try
+        {
+            _duplication = AcquireDuplication();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Could not re-acquire duplication for {Display.DeviceName}; giving up. {ex.Message}");
+            return false;
+        }
+
+        var desc = _duplication.Description;
+        var newSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
+
+        if (newSize.Width != ContentSize.Width || newSize.Height != ContentSize.Height)
+        {
+            Log.Info($"{Display.DeviceName} resized to {newSize.Width}x{newSize.Height}.");
+            ContentSize = newSize;
+            ContentSizeChanged?.Invoke(newSize);
+        }
+        else
+        {
+            Log.Info($"{Display.DeviceName}: duplication re-acquired after access loss.");
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Calls <see cref="Duplicate"/>, retrying transient failures — most commonly <c>E_ACCESSDENIED</c>
+    /// from a secure desktop (lock screen, UAC, a logon that hasn't finished settling) or a
+    /// fullscreen-exclusive app briefly holding the output. Shared by the constructor and
+    /// <see cref="TryRecoverFromAccessLost"/> so the very first acquire gets the same resilience as
+    /// every later re-acquire; without it, a race at process startup — e.g. this app's own Task
+    /// Scheduler logon entry launching before the desktop finishes compositing — throws once and
+    /// never gets a second chance.
+    /// </summary>
+    private IDXGIOutputDuplication AcquireDuplication()
+    {
+        Exception? lastError = null;
+
         for (var attempt = 1; attempt <= 5; attempt++)
         {
             try
             {
-                _duplication = Duplicate();
-                var desc = _duplication.Description;
-                var newSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
-
-                if (newSize.Width != ContentSize.Width || newSize.Height != ContentSize.Height)
-                {
-                    Log.Info($"{Display.DeviceName} resized to {newSize.Width}x{newSize.Height}.");
-                    ContentSize = newSize;
-                    ContentSizeChanged?.Invoke(newSize);
-                }
-                else
-                {
-                    Log.Info($"{Display.DeviceName}: duplication re-acquired after access loss.");
-                }
-
-                return true;
+                return Duplicate();
             }
             catch (Exception ex)
             {
-                Log.Warn($"Re-acquiring duplication for {Display.DeviceName} failed (attempt {attempt}/5): {ex.Message}");
-                Thread.Sleep(200);
+                lastError = ex;
+                Log.Warn($"Acquiring duplication for {Display.DeviceName} failed (attempt {attempt}/5): {ex.Message}");
+                if (attempt < 5) Thread.Sleep(200);
             }
         }
 
-        Log.Warn($"Could not re-acquire duplication for {Display.DeviceName}; giving up.");
-        return false;
+        throw lastError!;
     }
 
     /// <summary>Must be called with <see cref="_duplicationGate"/> already held.</summary>
@@ -357,13 +382,66 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
         }
     }
 
-    /// <summary>Forces the duplication to be torn down and re-acquired at the given size.</summary>
+    private readonly Lock _blackFrameGate = new();
+    private ID3D11Texture2D? _blackFrame;
+    private int _blackFrameWidth;
+    private int _blackFrameHeight;
+
+    /// <summary>Solid black frame at the current <see cref="ContentSize"/>; see the interface doc comment.</summary>
+    public ID3D11Texture2D BlackFrame
+    {
+        get
+        {
+            var size = ContentSize;
+
+            lock (_blackFrameGate)
+            {
+                if (_blackFrame is null || _blackFrameWidth != size.Width || _blackFrameHeight != size.Height)
+                {
+                    _blackFrame?.Dispose();
+                    _blackFrame = CreateBlackTexture(size.Width, size.Height);
+                    _blackFrameWidth = size.Width;
+                    _blackFrameHeight = size.Height;
+                }
+
+                return _blackFrame;
+            }
+        }
+    }
+
+    private ID3D11Texture2D CreateBlackTexture(int width, int height)
+    {
+        var texture = _d3d.Device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = (uint)width,
+            Height = (uint)height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Format.B8G8R8A8_UNorm,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.ShaderResource | BindFlags.RenderTarget,
+            CPUAccessFlags = CpuAccessFlags.None,
+            MiscFlags = ResourceOptionFlags.None,
+        });
+
+        using var rtv = _d3d.Device.CreateRenderTargetView(texture);
+        _d3d.ImmediateContext.ClearRenderTargetView(rtv, new Color4(0f, 0f, 0f, 1f));
+
+        return texture;
+    }
+
+    /// <summary>Forces the duplication to be torn down and re-acquired.</summary>
     public void Recreate(FrameSize size)
     {
         lock (_duplicationGate)
         {
+            // Acquire the replacement before disposing the current one: AcquireDuplication retries
+            // transient failures but can still exhaust them, and if it does, leaving the working
+            // duplication in place beats leaving this source with none at all.
+            var next = AcquireDuplication();
             _duplication.Dispose();
-            _duplication = Duplicate();
+            _duplication = next;
             var desc = _duplication.Description;
             ContentSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
         }
@@ -389,6 +467,8 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
                 _latchBuffers[i] = null;
             }
         }
+
+        lock (_blackFrameGate) _blackFrame?.Dispose();
 
         _cursorOverlay.Dispose();
 

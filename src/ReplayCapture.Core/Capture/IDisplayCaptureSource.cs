@@ -35,9 +35,19 @@ public interface IDisplayCaptureSource<TFrame> : IDisposable
 
     /// <summary>
     /// Hands the caller the latest captured frame. Returns false until the very first frame lands —
-    /// on a completely static display that can take a moment, because nothing has changed to send.
+    /// on a completely static display that can take a moment, because nothing has changed to send —
+    /// or whenever the display currently has nothing to offer.
     /// </summary>
     bool TryGetLatest(out TFrame frame, out long qpcTicks);
+
+    /// <summary>
+    /// A solid black frame at <see cref="ContentSize"/>, lazily created and cached, resized whenever
+    /// <see cref="ContentSize"/> changes. For the pacer to submit when <see cref="TryGetLatest"/>
+    /// has nothing real to offer, so a display with no signal yet — or one that has temporarily gone
+    /// away — still produces continuous, gap-free output instead of the saved clip silently missing
+    /// time.
+    /// </summary>
+    TFrame BlackFrame { get; }
 
     /// <summary>Forces capture to be torn down and re-acquired at the given size.</summary>
     void Recreate(FrameSize size);

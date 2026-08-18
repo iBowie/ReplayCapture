@@ -248,14 +248,37 @@ reads 2 on this machine because Sunshine holds an NVENC session of its own.
 
 ### Recovery
 
-`rcprobe rebuild` forces the path a resolution change takes — recreate the frame pool, rebuild the
-encoder, discard the ring — and verifies the pipeline resumes. It does so without touching display
-settings. Last run: rebuilt in under 1.5 s, resumed at 60 fps with zero late ticks, and the
-post-rebuild clip decoded clean at 570 frames of exact 60/1 CFR with all six audio tracks.
+`rcprobe rebuild` forces the path a resolution change takes — re-provision capture at its current
+native size and tell the encoder to rescale into it — and verifies the pipeline resumes with the
+buffer untouched. It does so without touching display settings. Last run: resized in under 1.5 s,
+resumed at 60 fps with zero late ticks, and the buffer never dropped below its pre-resize length.
 
-The buffer is deliberately **discarded** on rebuild. A single `.mov` track cannot change resolution
-partway through and H.264 parameter sets are dimension-specific, so keeping the old packets would
-produce a file no decoder can read. Losing history beats writing a corrupt clip.
+**Each display's encode resolution is fixed for the life of its recorder** — whatever the display
+was running when the recorder was constructed — precisely so a resolution change never needs the
+ring buffer or the codec touched at all. A single `.mov` track cannot change resolution partway
+through and H.264 parameter sets are dimension-specific, so the old design tore the whole encoder
+down and discarded the buffer on every resize. Now `DisplayRecorder` instead tells the encoder
+(`IVideoEncoder.NotifySourceResized`) that incoming frames are a new native size; the same GPU video
+processor blit that already does BGRA→NV12 colour conversion (`Nv12Converter`) scales for free by
+declaring a different input size than output size, so the codec and ring buffer never see a
+discontinuity. The trade-off: after a resolution change, the saved clip is a GPU-scaled copy of the
+new native frames at the *original* resolution, not a native-resolution capture of whatever the
+display is running now.
+
+That fixed encode size doesn't have to come from the display's own native size, either:
+`DisplayConfig.CaptureWidth`/`CaptureHeight` (both must be set, or neither — a lone value is ignored
+with a warning) pin it explicitly. Set from the start, `DisplayRecorder` builds the encoder at that
+size and immediately tells it the display's actual native size is different — the display's real
+frames get scaled to the configured target from the very first frame, the same way a later
+resolution change would be absorbed.
+
+A display that has nothing to offer right now — no frame has ever arrived yet, or it went away
+temporarily (disconnected, asleep, mid-reacquire after access was lost) — gets a solid black frame
+encoded in place of a skipped tick (`IDisplayCaptureSource.BlackFrame`, sized to match whatever the
+capture side currently expects). The alternative was a silent gap: the pacer would just skip
+encoding for that tick, and a saved clip has no way to represent "nothing happened here" except by
+holding the last frame indefinitely or coming up short. `DisplayRecorder.BlankFrames` counts how
+often this happened, for diagnosing "why is part of my clip black."
 
 A watchdog in `ReplaySession` checks every 3 s for a lost GPU (driver update, TDR) and for displays
 appearing or disappearing, and raises `RecoveryRequired` — the app rebuilds the session in response,

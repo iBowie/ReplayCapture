@@ -174,6 +174,18 @@ public sealed record DisplayConfig
 
     public int BitrateMbps { get; init; } = 40;
 
+    /// <summary>
+    /// Fixed encode resolution for this display, independent of its actual native size. <c>null</c>
+    /// (the default) means "whatever the display's native resolution is when the recorder starts" —
+    /// what most configs want. When set, native frames are scaled to this fixed size before encoding
+    /// no matter what size they actually arrive at, including after a later resolution change; see
+    /// <see cref="ReplayCapture.Core.DisplayRecorder{TFrame}"/>'s class remarks. <see cref="CaptureWidth"/> and
+    /// <see cref="CaptureHeight"/> must both be set or both left <c>null</c> — a lone value is
+    /// ignored in favour of auto-detecting from the display's native size.
+    /// </summary>
+    public int? CaptureWidth { get; init; }
+    public int? CaptureHeight { get; init; }
+
     /// <summary>Friendly label used in the UI and in output filenames.</summary>
     public string? Label { get; init; }
 }

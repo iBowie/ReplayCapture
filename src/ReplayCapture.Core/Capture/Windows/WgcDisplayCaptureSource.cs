@@ -188,6 +188,55 @@ public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textur
         }
     }
 
+    private readonly Lock _blackFrameGate = new();
+    private ID3D11Texture2D? _blackFrame;
+    private int _blackFrameWidth;
+    private int _blackFrameHeight;
+
+    /// <summary>Solid black frame at the current <see cref="ContentSize"/>; see the interface doc comment.</summary>
+    public ID3D11Texture2D BlackFrame
+    {
+        get
+        {
+            var size = ContentSize;
+
+            lock (_blackFrameGate)
+            {
+                if (_blackFrame is null || _blackFrameWidth != size.Width || _blackFrameHeight != size.Height)
+                {
+                    _blackFrame?.Dispose();
+                    _blackFrame = CreateBlackTexture(size.Width, size.Height);
+                    _blackFrameWidth = size.Width;
+                    _blackFrameHeight = size.Height;
+                }
+
+                return _blackFrame;
+            }
+        }
+    }
+
+    private ID3D11Texture2D CreateBlackTexture(int width, int height)
+    {
+        var texture = _d3d.Device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = (uint)width,
+            Height = (uint)height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Format.B8G8R8A8_UNorm,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.ShaderResource | BindFlags.RenderTarget,
+            CPUAccessFlags = CpuAccessFlags.None,
+            MiscFlags = ResourceOptionFlags.None,
+        });
+
+        using var rtv = _d3d.Device.CreateRenderTargetView(texture);
+        _d3d.ImmediateContext.ClearRenderTargetView(rtv, new Vortice.Mathematics.Color4(0f, 0f, 0f, 1f));
+
+        return texture;
+    }
+
     /// <summary>Rebuilds the frame pool after a resolution change.</summary>
     public void Recreate(FrameSize size)
     {
@@ -210,6 +259,8 @@ public sealed class WgcDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textur
             _latch?.Dispose();
             _latch = null;
         }
+
+        lock (_blackFrameGate) _blackFrame?.Dispose();
 
         Log.Info($"Capture stopped for {Display.DeviceName} after {FramesArrived} frames.");
     }

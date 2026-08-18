@@ -139,6 +139,8 @@ public abstract unsafe class GpuVideoEncoderBase : VideoEncoderBase<D3DTexture2D
 
     protected abstract string CodecName { get; }
 
+    protected override void ReconfigureSource(int width, int height) => _converter.Reconfigure(width, height);
+
     /// <summary>Sets the encoder's private (<c>AVDictionary</c>) options — preset, rate control, profile, etc.</summary>
     protected abstract void ConfigureOptions(AVDictionary** options, int bitrateMbps);
 

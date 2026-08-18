@@ -62,7 +62,7 @@ switch (command)
                                 Run the full pipeline and write one .mov per display
               bench [secs]      Measure the always-on overhead against an idle baseline
               benchreal [secs]  Same, but against the actual saved config.json and every display
-              rebuild           Force an encoder rebuild mid-capture and check recovery
+              rebuild           Force a mid-capture resize and check the buffer survives intact
             """);
         break;
 }
@@ -239,9 +239,10 @@ static void CaptureSmokeTest(double seconds, ReplayCapture.Core.Config.CaptureBa
         : "\n  FAIL - no frames converted.\n");
 }
 
-// Exercises the recovery path a resolution change takes: recreate the frame pool, rebuild the
-// encoder, discard the ring, and keep going. Triggered deliberately so the risky code is tested
-// without changing anyone's display settings.
+// Exercises the recovery path a resolution change takes: re-provision capture at its current
+// native size and tell the encoder to rescale into its fixed output size, with the encoder and
+// ring buffer never touched. Triggered deliberately so the risky code is tested without changing
+// anyone's display settings.
 static void RebuildTest()
 {
     var config = new ReplayCapture.Core.Config.AppConfig { BufferSeconds = 10 };
@@ -249,43 +250,47 @@ static void RebuildTest()
     session.Start();
 
     var recorder = session.Recorders[0];
-    Console.WriteLine("\nBuffering for 6s before forcing a rebuild…\n");
+    Console.WriteLine("\nBuffering for 6s before forcing a resize…\n");
     Thread.Sleep(6000);
 
     var beforeFrames = recorder.FramesEncoded;
     var beforeBuffered = recorder.SecondsBuffered;
+    var (beforeWidth, beforeHeight) = (recorder.Width, recorder.Height);
     Console.WriteLine($"  before   {beforeFrames,6} frames  {beforeBuffered,5:F1}s buffered  " +
-                      $"{recorder.Rebuilds} rebuild(s)");
+                      $"{beforeWidth}x{beforeHeight}  {recorder.Resizes} resize(s)");
 
-    recorder.RequestRebuild();
+    recorder.RequestResize();
     Thread.Sleep(1500);
 
-    var afterRebuild = recorder.FramesEncoded;
-    Console.WriteLine($"  rebuilt  {afterRebuild,6} frames  {recorder.SecondsBuffered,5:F1}s buffered  " +
-                      $"{recorder.Rebuilds} rebuild(s)   <- buffer intentionally discarded");
+    var afterResize = recorder.FramesEncoded;
+    var afterBuffered = recorder.SecondsBuffered;
+    Console.WriteLine($"  resized  {afterResize,6} frames  {afterBuffered,5:F1}s buffered  " +
+                      $"{recorder.Width}x{recorder.Height}  {recorder.Resizes} resize(s)   <- buffer kept intact");
 
     Console.WriteLine("\nRefilling for 8s…\n");
     Thread.Sleep(8000);
 
-    var recovered = recorder.FramesEncoded - afterRebuild;
+    var recovered = recorder.FramesEncoded - afterResize;
     Console.WriteLine($"  after    {recorder.FramesEncoded,6} frames  {recorder.SecondsBuffered,5:F1}s buffered  " +
                       $"late ticks {recorder.LateTicks}");
 
     var results = session.Save();
     var saved = results.FirstOrDefault();
 
-    var pass = recorder.Rebuilds == 1
-               && recovered > 300               // encoding resumed at roughly full rate
+    var pass = recorder.Resizes == 1
+               && recorder.Width == beforeWidth && recorder.Height == beforeHeight   // encode size never changed
+               && afterBuffered >= beforeBuffered   // the buffer was never wiped
+               && recovered > 300                   // encoding kept up at roughly full rate
                && saved.Success
                && saved.DurationSeconds > 5;
 
     Console.WriteLine();
     Console.WriteLine(saved.Success
-        ? $"  post-rebuild save: {saved.Path} ({saved.DurationSeconds:F2}s)"
-        : $"  post-rebuild save FAILED: {saved.Error}");
+        ? $"  post-resize save: {saved.Path} ({saved.DurationSeconds:F2}s)"
+        : $"  post-resize save FAILED: {saved.Error}");
 
     Console.WriteLine(pass
-        ? "\n  PASS - the pipeline recovered and still produces a valid clip.\n"
+        ? "\n  PASS - the resize was absorbed with the buffer intact and the clip is valid.\n"
         : "\n  FAIL - recovery did not complete cleanly.\n");
 }
 

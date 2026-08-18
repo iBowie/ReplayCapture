@@ -238,6 +238,17 @@ public sealed unsafe class PipeWireStream : IDisplayCaptureSource<PipeWireBuffer
     }
 
     /// <summary>
+    /// Not implemented: unlike the Windows backends, a <see cref="PipeWireBuffer"/> wraps a real
+    /// DMA-BUF/shared-memory handle the compositor owns, not a texture this class can allocate and
+    /// clear itself — synthesizing one needs a real buffer allocator (Linux support plan Phase 2,
+    /// alongside the VAAPI wiring), which doesn't exist yet. Not reachable today: this class isn't
+    /// wired into any <c>DisplayRecorder</c> yet either (see the class remarks).
+    /// </summary>
+    public PipeWireBuffer BlackFrame =>
+        throw new NotSupportedException(
+            "PipeWireStream cannot synthesize a black frame yet — see the Linux support plan.");
+
+    /// <summary>
     /// Reconnects the stream at a new size. Best-effort and unverified: a portal-backed ScreenCast
     /// session may need a fresh portal negotiation on a resolution change rather than a plain stream
     /// reconnect — see the Linux support plan's Phase 3 notes on this being an open question for the

@@ -107,6 +107,23 @@ public class AppConfigTests
     }
 
     [Fact]
+    public void Capture_resolution_defaults_to_auto_and_round_trips_when_set()
+    {
+        Assert.Null(new DisplayConfig { DeviceName = @"\\.\DISPLAY1" }.CaptureWidth);
+        Assert.Null(new DisplayConfig { DeviceName = @"\\.\DISPLAY1" }.CaptureHeight);
+
+        var config = new AppConfig
+        {
+            Displays = [new DisplayConfig { DeviceName = @"\\.\DISPLAY1", CaptureWidth = 1920, CaptureHeight = 1080 }],
+        };
+
+        var restored = RoundTrip(config);
+
+        Assert.Equal(1920, restored.Displays[0].CaptureWidth);
+        Assert.Equal(1080, restored.Displays[0].CaptureHeight);
+    }
+
+    [Fact]
     public void Capture_backend_defaults_to_dxgi()
     {
         Assert.Equal(CaptureBackend.Dxgi, new AppConfig().CaptureBackend);

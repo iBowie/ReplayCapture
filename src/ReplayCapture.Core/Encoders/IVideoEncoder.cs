@@ -35,6 +35,15 @@ public interface IVideoEncoder<TFrame> : IDisposable
     /// </summary>
     void Encode(TFrame source, long frameIndex, long qpcTicks, bool forceKeyframe = false);
 
+    /// <summary>
+    /// Notifies the encoder that frames handed to <see cref="Encode"/> now arrive at a different
+    /// native size. <see cref="Width"/>/<see cref="Height"/> stay exactly what they were at
+    /// construction — the encoder scales incoming frames to match rather than being rebuilt — so a
+    /// display resolution change never forces the codec (and the ring buffer behind it) to be torn
+    /// down and recreated.
+    /// </summary>
+    void NotifySourceResized(int width, int height);
+
     /// <summary>Pushes any frames the encoder is still holding. Called before writing a clip.</summary>
     void Flush();
 }

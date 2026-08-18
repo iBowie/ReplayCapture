@@ -125,6 +125,8 @@ public sealed unsafe class X264VideoEncoder : VideoEncoderBase<D3DTexture2D>
         }
     }
 
+    protected override void ReconfigureSource(int width, int height) => _converter.Reconfigure(width, height);
+
     protected override void PopulateFrame(AVFrame* frame, D3DTexture2D source)
     {
         _converter.Convert(source, _renderTarget, 0);

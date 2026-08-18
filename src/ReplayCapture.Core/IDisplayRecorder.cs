@@ -23,6 +23,13 @@ public interface IDisplayRecorder : IDisposable
     /// <summary>Frames the pacer had to invent because the screen had not changed.</summary>
     long DuplicateFrames { get; }
 
+    /// <summary>
+    /// Frames encoded as solid black because the display had nothing to offer — no frame has ever
+    /// arrived yet, or it was temporarily unavailable. A nonzero count once recording is well under
+    /// way means the display went away for a while.
+    /// </summary>
+    long BlankFrames { get; }
+
     double SecondsBuffered { get; }
     long BufferedBytes { get; }
     long LateTicks { get; }
@@ -33,19 +40,25 @@ public interface IDisplayRecorder : IDisposable
     /// </summary>
     long FramesSkippedForDrift { get; }
 
-    /// <summary>How many times the encoder had to be rebuilt after a resolution change.</summary>
-    long Rebuilds { get; }
+    /// <summary>How many times the capture side has been re-provisioned for a new native size.</summary>
+    long Resizes { get; }
 
+    /// <summary>
+    /// Fixed for this recorder's whole lifetime — set once at construction from the display's native
+    /// size at the time, and never changed by a later resolution change. See
+    /// <see cref="DisplayRecorder{TFrame}"/>'s class remarks for how a resolution change is absorbed
+    /// without touching this.
+    /// </summary>
     int Width { get; }
     int Height { get; }
     byte[] ExtraData { get; }
 
     /// <summary>
-    /// Asks the pacer to rebuild the capture pool and encoder on its next tick. Normally triggered
-    /// by a resolution change; also exposed so the rebuild path can be exercised deliberately
+    /// Asks the pacer to re-provision capture for its current native size on its next tick. Normally
+    /// triggered by a resolution change; also exposed so the path can be exercised deliberately
     /// rather than only when someone happens to change their display settings.
     /// </summary>
-    void RequestRebuild();
+    void RequestResize();
 
     void Start();
 

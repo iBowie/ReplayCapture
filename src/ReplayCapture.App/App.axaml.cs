@@ -31,6 +31,14 @@ public partial class App : Application
     /// </summary>
     private static readonly TimeSpan ResumeSettleDelay = TimeSpan.FromSeconds(3);
 
+    /// <summary>
+    /// How often to retry starting the capture session after it fails to come up at all (as opposed
+    /// to failing mid-run, which the watchdog handles). A GPU or display duplication can be
+    /// transiently unavailable right after logon — before the desktop finishes compositing — and
+    /// nothing else prompts a retry in that case, so without this the tray sits idle forever.
+    /// </summary>
+    private static readonly TimeSpan StartupRetryInterval = TimeSpan.FromSeconds(5);
+
     private IClassicDesktopStyleApplicationLifetime? _desktop;
     private Mutex? _singleInstance;
     private ConfigStore _configStore = null!;
@@ -39,6 +47,7 @@ public partial class App : Application
     private GlobalHotkeyService? _hotkeys;
     private IndicatorWindow? _indicator;
     private DispatcherTimer? _statusTimer;
+    private DispatcherTimer? _startupRetryTimer;
 
     private ReplaySession? _session;
     private string? _sessionError;
@@ -154,13 +163,31 @@ public partial class App : Application
 
             if (_sessionError is not null)
             {
-                _tray?.Notify("Capture could not start", _sessionError, isError: true);
+                if (_startupRetryTimer is null)
+                {
+                    _tray?.Notify("Capture could not start", $"{_sessionError} Retrying automatically.", isError: true);
+                    _startupRetryTimer = new DispatcherTimer { Interval = StartupRetryInterval };
+                    _startupRetryTimer.Tick += (_, _) =>
+                    {
+                        _startupRetryTimer!.Stop();
+                        StartSession();
+                    };
+                }
+
                 _tray?.SetState(BufferState.Idle, _sessionError);
                 _indicator?.ShowIdle("capture off");
+                _startupRetryTimer.Start();
             }
             else
             {
                 Log.Info("Capture session armed.");
+
+                if (_startupRetryTimer is not null)
+                {
+                    _tray?.Notify("Capture started", "The capture session came up after retrying.");
+                    _startupRetryTimer.Stop();
+                    _startupRetryTimer = null;
+                }
             }
 
             UpdateStatus();
@@ -486,6 +513,7 @@ public partial class App : Application
 
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _statusTimer?.Stop();
+        _startupRetryTimer?.Stop();
         _hotkeys?.Dispose();
         _session?.Dispose();
         _indicator?.Close();

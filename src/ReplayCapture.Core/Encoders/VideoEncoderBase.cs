@@ -71,6 +71,11 @@ public abstract unsafe class VideoEncoderBase<TFrame> : IVideoEncoder<TFrame>
     /// </summary>
     protected abstract void PopulateFrame(AVFrame* frame, TFrame source);
 
+    /// <summary>Rebuilds whatever converts <typeparamref name="TFrame"/> into the encoder's fixed-size input for a new source size.</summary>
+    protected abstract void ReconfigureSource(int width, int height);
+
+    public void NotifySourceResized(int width, int height) => ReconfigureSource(width, height);
+
     public void Encode(TFrame source, long frameIndex, long qpcTicks, bool forceKeyframe = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

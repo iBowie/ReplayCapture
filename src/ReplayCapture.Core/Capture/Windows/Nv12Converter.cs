@@ -16,6 +16,13 @@ namespace ReplayCapture.Core.Capture;
 /// limited-range ("studio", 16-235) BT.709. Getting this pairing wrong produces footage that looks
 /// washed out or crushed in Premiere and reads as a capture bug rather than a tagging bug.
 /// </para>
+/// <para>
+/// <b><see cref="Width"/>/<see cref="Height"/> are the encoder's fixed output size, not necessarily
+/// the source texture's.</b> The same video processor blit that already does colour conversion also
+/// scales, for free, whenever the source doesn't match — which is what lets a display's native
+/// resolution change mid-session without the encoder (and the ring buffer behind it) ever being
+/// rebuilt. See <see cref="Reconfigure"/>.
+/// </para>
 /// </summary>
 public sealed class Nv12Converter : IDisposable
 {
@@ -27,40 +34,55 @@ public sealed class Nv12Converter : IDisposable
     private const uint NominalRangeFull = 2;     // 0-255
 
     private readonly D3DContext _d3d;
-    private readonly ID3D11VideoProcessorEnumerator _enumerator;
-    private readonly ID3D11VideoProcessor _processor;
+    private readonly int _framesPerSecond;
 
     // Views are expensive to create and the underlying textures are pooled and reused, so both
-    // sides are cached by native pointer.
+    // sides are cached by native pointer. Rebuilt whenever the enumerator/processor are (see
+    // Reconfigure), since a view is only valid against the enumerator it was created from.
     private readonly Dictionary<IntPtr, ID3D11VideoProcessorInputView> _inputViews = [];
     private readonly Dictionary<(IntPtr Texture, uint Slice), ID3D11VideoProcessorOutputView> _outputViews = [];
 
+    // Always assigned by CreateProcessor, called synchronously from the constructor.
+    private ID3D11VideoProcessorEnumerator _enumerator = null!;
+    private ID3D11VideoProcessor _processor = null!;
+    private int _sourceWidth;
+    private int _sourceHeight;
+
+    /// <summary>Fixed output size — what the encoder was built for. Never changes after construction.</summary>
     public int Width { get; }
     public int Height { get; }
 
     public Nv12Converter(D3DContext d3d, int width, int height, int framesPerSecond)
     {
         _d3d = d3d;
+        _framesPerSecond = framesPerSecond;
         Width = width;
         Height = height;
 
+        CreateProcessor(width, height);
+
+        Log.Info($"NV12 converter ready for {width}x{height} (BGRA full-range -> NV12 BT.709 studio).");
+    }
+
+    private void CreateProcessor(int sourceWidth, int sourceHeight)
+    {
         var description = new VideoProcessorContentDescription
         {
             InputFrameFormat = VideoFrameFormat.Progressive,
-            InputWidth = (uint)width,
-            InputHeight = (uint)height,
-            OutputWidth = (uint)width,
-            OutputHeight = (uint)height,
-            InputFrameRate = new Vortice.DXGI.Rational((uint)framesPerSecond, 1),
-            OutputFrameRate = new Vortice.DXGI.Rational((uint)framesPerSecond, 1),
+            InputWidth = (uint)sourceWidth,
+            InputHeight = (uint)sourceHeight,
+            OutputWidth = (uint)Width,
+            OutputHeight = (uint)Height,
+            InputFrameRate = new Vortice.DXGI.Rational((uint)_framesPerSecond, 1),
+            OutputFrameRate = new Vortice.DXGI.Rational((uint)_framesPerSecond, 1),
             Usage = VideoUsage.PlaybackNormal,
         };
 
-        _enumerator = d3d.VideoDevice.CreateVideoProcessorEnumerator(description);
-        _processor = d3d.VideoDevice.CreateVideoProcessor(_enumerator, 0);
+        _enumerator = _d3d.VideoDevice.CreateVideoProcessorEnumerator(description);
+        _processor = _d3d.VideoDevice.CreateVideoProcessor(_enumerator, 0);
 
         // Input: what the desktop actually is - full-range RGB.
-        d3d.VideoContext.VideoProcessorSetStreamColorSpace(_processor, 0, new VideoProcessorColorSpace
+        _d3d.VideoContext.VideoProcessorSetStreamColorSpace(_processor, 0, new VideoProcessorColorSpace
         {
             Usage = UsagePlaybackNormal,
             RGB_Range = RgbRangeFull,
@@ -68,7 +90,7 @@ public sealed class Nv12Converter : IDisposable
         });
 
         // Output: what H.264 for delivery should be - BT.709, studio range.
-        d3d.VideoContext.VideoProcessorSetOutputColorSpace(_processor, new VideoProcessorColorSpace
+        _d3d.VideoContext.VideoProcessorSetOutputColorSpace(_processor, new VideoProcessorColorSpace
         {
             Usage = UsagePlaybackNormal,
             YCbCr_Matrix = YCbCrMatrixBt709,
@@ -76,9 +98,38 @@ public sealed class Nv12Converter : IDisposable
         });
 
         // No deinterlacing, no frame-rate conversion - one input frame in, one output frame out.
-        d3d.VideoContext.VideoProcessorSetStreamFrameFormat(_processor, 0, VideoFrameFormat.Progressive);
+        _d3d.VideoContext.VideoProcessorSetStreamFrameFormat(_processor, 0, VideoFrameFormat.Progressive);
 
-        Log.Info($"NV12 converter ready for {width}x{height} (BGRA full-range -> NV12 BT.709 studio).");
+        _sourceWidth = sourceWidth;
+        _sourceHeight = sourceHeight;
+    }
+
+    /// <summary>
+    /// Rebuilds the video processor for a new native source size, leaving <see cref="Width"/>/
+    /// <see cref="Height"/> — the encoder's fixed output — untouched. A no-op if the source hasn't
+    /// actually changed size.
+    /// <para>
+    /// This is the mechanism that lets <see cref="DisplayRecorder{TFrame}"/> absorb a display
+    /// resolution change without tearing down the encoder or discarding its ring buffer: only the
+    /// (cheap) enumerator/processor pair is replaced, not the hardware frame pool or the codec.
+    /// </para>
+    /// </summary>
+    public void Reconfigure(int sourceWidth, int sourceHeight)
+    {
+        if (sourceWidth == _sourceWidth && sourceHeight == _sourceHeight) return;
+
+        foreach (var view in _inputViews.Values) view.Dispose();
+        foreach (var view in _outputViews.Values) view.Dispose();
+        _inputViews.Clear();
+        _outputViews.Clear();
+
+        _processor.Dispose();
+        _enumerator.Dispose();
+
+        CreateProcessor(sourceWidth, sourceHeight);
+
+        Log.Info($"NV12 converter rescaled: source now {sourceWidth}x{sourceHeight}, " +
+                 $"output stays fixed at {Width}x{Height}.");
     }
 
     /// <summary>

@@ -80,12 +80,14 @@ public sealed class ReplaySession : IDisposable
             var captureBackend = config.CaptureBackend;
             var videoEncoderBackend = config.VideoEncoderBackend;
             var bitrateMbps = displayConfig.BitrateMbps;
+            var fixedEncodeSize = ResolveFixedEncodeSize(display, displayConfig);
 
             _recorders.Add(new DisplayRecorder<D3DTexture2D>(
                 display, framesPerSecond, config.BufferSeconds, perDisplayBytes,
                 captureFactory: () => DisplayCaptureSourceFactory.Create(captureBackend, _d3d, display),
                 encoderFactory: (width, height) =>
-                    VideoEncoderFactory.Create(videoEncoderBackend, _d3d, width, height, framesPerSecond, bitrateMbps)));
+                    VideoEncoderFactory.Create(videoEncoderBackend, _d3d, width, height, framesPerSecond, bitrateMbps),
+                fixedEncodeSize: fixedEncodeSize));
         }
 
         _audio = new AudioEngine(config, EpochQpc);
@@ -174,6 +176,25 @@ public sealed class ReplaySession : IDisposable
 
         Log.Warn("No configured display is currently attached; falling back to all attached displays.");
         return attached;
+    }
+
+    /// <summary>
+    /// A user-configured resolution needs both <see cref="DisplayConfig.CaptureWidth"/> and
+    /// <see cref="DisplayConfig.CaptureHeight"/> — a lone value can't describe a target size, so it
+    /// is ignored (with a warning) in favour of auto-detecting from the display's native size.
+    /// </summary>
+    internal static FrameSize? ResolveFixedEncodeSize(DisplayInfo display, DisplayConfig displayConfig)
+    {
+        if (displayConfig.CaptureWidth is { } width && displayConfig.CaptureHeight is { } height)
+            return new FrameSize(width, height);
+
+        if (displayConfig.CaptureWidth is not null || displayConfig.CaptureHeight is not null)
+        {
+            Log.Warn($"{display.DeviceName}: CaptureWidth and CaptureHeight must both be set to override " +
+                     "the capture resolution; ignoring the partial value and auto-detecting instead.");
+        }
+
+        return null;
     }
 
     public void Start()
