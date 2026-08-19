@@ -13,6 +13,28 @@ public class AppConfigTests
             JsonSerializer.Serialize(config, AppConfigJsonContext.Default.AppConfig),
             AppConfigJsonContext.Default.AppConfig)!;
 
+    /// <summary>
+    /// A config.json predating the MonitorId field (or one with a display entry that just doesn't
+    /// carry it) must still deserialize. It shipped required once: a config with one such display
+    /// entry failed to parse at all, and ConfigStore quarantined the *whole* file — hotkey, buffer
+    /// length, and every audio track along with the one stale display entry.
+    /// </summary>
+    [Fact]
+    public void A_display_entry_missing_monitorId_does_not_fail_the_whole_document()
+    {
+        const string legacyJson = """
+            {
+              "hotkey": "Ctrl+Alt+R",
+              "displays": [ { "deviceName": "\\\\.\\DISPLAY1", "enabled": true } ]
+            }
+            """;
+
+        var config = JsonSerializer.Deserialize(legacyJson, AppConfigJsonContext.Default.AppConfig)!;
+
+        Assert.Equal("Ctrl+Alt+R", config.Hotkey);
+        Assert.Equal("", config.Displays[0].MonitorId);
+    }
+
     [Fact]
     public void Default_audio_tracks_all_parse()
     {
@@ -83,8 +105,8 @@ public class AppConfigTests
             MaxRingMemoryMegabytes = 1536,
             Displays =
             [
-                new DisplayConfig { DeviceName = @"\\.\DISPLAY1", Fps = null, BitrateMbps = 50, Label = "Main" },
-                new DisplayConfig { DeviceName = @"\\.\DISPLAY2", Fps = 60, BitrateMbps = 30, Enabled = false },
+                new DisplayConfig { MonitorId = @"\\.\DISPLAY1", Fps = null, BitrateMbps = 50, Label = "Main" },
+                new DisplayConfig { MonitorId = @"\\.\DISPLAY2", Fps = 60, BitrateMbps = 30, Enabled = false },
             ],
         };
 
@@ -109,12 +131,12 @@ public class AppConfigTests
     [Fact]
     public void Capture_resolution_defaults_to_auto_and_round_trips_when_set()
     {
-        Assert.Null(new DisplayConfig { DeviceName = @"\\.\DISPLAY1" }.CaptureWidth);
-        Assert.Null(new DisplayConfig { DeviceName = @"\\.\DISPLAY1" }.CaptureHeight);
+        Assert.Null(new DisplayConfig { MonitorId = @"\\.\DISPLAY1" }.CaptureWidth);
+        Assert.Null(new DisplayConfig { MonitorId = @"\\.\DISPLAY1" }.CaptureHeight);
 
         var config = new AppConfig
         {
-            Displays = [new DisplayConfig { DeviceName = @"\\.\DISPLAY1", CaptureWidth = 1920, CaptureHeight = 1080 }],
+            Displays = [new DisplayConfig { MonitorId = @"\\.\DISPLAY1", CaptureWidth = 1920, CaptureHeight = 1080 }],
         };
 
         var restored = RoundTrip(config);

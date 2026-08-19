@@ -573,6 +573,7 @@ static void ListDisplays()
     foreach (var d in displays)
     {
         Console.WriteLine($"  {d.DeviceName}{(d.IsPrimary ? "  [primary]" : "")}");
+        Console.WriteLine($"    monitor id : {d.MonitorId}");
         Console.WriteLine($"    resolution : {d.Width}x{d.Height} @ {d.RefreshHz} Hz");
         Console.WriteLine($"    position   : ({d.Left}, {d.Top})");
         Console.WriteLine($"    adapter    : {d.AdapterDescription}");

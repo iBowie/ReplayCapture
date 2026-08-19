@@ -41,6 +41,7 @@ public static class DisplayEnumerator
                         displays.Add(new DisplayInfo
                         {
                             DeviceName = deviceName,
+                            MonitorId = ResolveMonitorId(deviceName),
                             MonitorHandle = description.Monitor,
                             AdapterDescription = adapterName,
                             Left = rect.Left,
@@ -79,5 +80,34 @@ public static class DisplayEnumerator
         }
 
         return 60;
+    }
+
+    /// <summary>
+    /// Resolves the physical monitor's stable PnP device interface path for a GDI device name, so
+    /// identity survives a hot-plug that reassigns <c>\\.\DISPLAYn</c> ordinals. Falls back to the
+    /// GDI name itself (with a warning) when no interface path is available — e.g. some virtual or
+    /// software displays don't expose one — in which case identity reverts to that ordinal's usual
+    /// instability.
+    /// </summary>
+    private static unsafe string ResolveMonitorId(string gdiDeviceName)
+    {
+        try
+        {
+            var device = new DISPLAY_DEVICEW { cb = (uint)sizeof(DISPLAY_DEVICEW) };
+            if (PInvoke.EnumDisplayDevices(gdiDeviceName, 0, ref device, PInvoke.EDD_GET_DEVICE_INTERFACE_NAME))
+            {
+                var span = device.DeviceID.AsSpan();
+                var nullIndex = span.IndexOf('\0');
+                var value = new string(nullIndex >= 0 ? span[..nullIndex] : span);
+                if (value.Length > 0) return value;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Could not resolve a stable monitor id for {gdiDeviceName}: {ex.Message}");
+        }
+
+        Log.Warn($"No stable monitor id available for {gdiDeviceName}; falling back to its GDI name.");
+        return gdiDeviceName;
     }
 }

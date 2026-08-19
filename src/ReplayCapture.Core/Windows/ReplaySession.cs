@@ -30,22 +30,44 @@ public sealed class ReplaySession : IDisposable
     private readonly D3DContext _d3d;
     private readonly List<IDisplayRecorder> _recorders = [];
     private readonly AudioEngine _audio;
+
+    /// <summary>
+    /// Guards <see cref="_recorders"/> against concurrent mutation. Reused as the same gate
+    /// <see cref="Save"/> already held (rather than a second lock), so a live attach/detach can never
+    /// race a save that is mid-snapshot over the list — one simply waits for the other.
+    /// </summary>
     private readonly object _saveGate = new();
-    private readonly HashSet<string> _capturedDeviceNames;
+
     private readonly Timer _watchdog;
+
+    /// <summary>
+    /// Ring-buffer bytes handed to each display's recorder, fixed once from the displays selected at
+    /// construction time. A display attached later (see <see cref="AttachRecorder"/>) reuses this
+    /// same figure rather than shrinking every other display's already-fixed-size buffer.
+    /// </summary>
+    private readonly long _perDisplayBytes;
 
     private AppConfig _config;
     private int _recoverySignalled;
+    private int _healthCheckRunning;
     private bool _disposed;
 
     /// <summary>
-    /// Raised when the session can no longer heal itself and must be rebuilt from scratch — a lost
-    /// GPU or a change in which displays exist. Fires at most once per session; the owner is
-    /// expected to dispose this session and construct a new one.
+    /// Raised when the session can no longer heal itself and must be rebuilt from scratch — only a
+    /// lost GPU, since that invalidates every recorder's GPU resources at once. Fires at most once
+    /// per session; the owner is expected to dispose this session and construct a new one.
     /// </summary>
     public event Action<string>? RecoveryRequired;
 
-    public IReadOnlyList<IDisplayRecorder> Recorders => _recorders;
+    /// <summary>
+    /// Raised whenever one display's recorder is attached or detached without disturbing any other
+    /// display — a capture surface closing, a display leaving or joining the selected set, or a
+    /// display exceeding the blank-frame timeout. Purely informational (e.g. for a tray
+    /// notification); the session has already healed itself by the time this fires.
+    /// </summary>
+    public event Action<string>? DisplayTopologyChanged;
+
+    public IReadOnlyList<IDisplayRecorder> Recorders => SnapshotRecorders();
     public AudioEngine Audio => _audio;
 
     /// <summary>Shared timeline origin for audio and video alike.</summary>
@@ -62,46 +84,56 @@ public sealed class ReplaySession : IDisposable
         if (attached.Count == 0) throw new InvalidOperationException("No displays are attached.");
 
         var selected = SelectDisplays(attached, config).ToList();
-        _capturedDeviceNames = [.. selected.Select(d => d.DeviceName)];
 
         // Divide the cap across the displays actually being captured, not the ones named in config.
         // Config commonly lists none at all (first run means "capture everything attached"), and
         // dividing by that zero meant every display got the *full* cap — so two screens quietly
         // used twice the configured ceiling.
-        var perDisplayBytes = (long)config.MaxRingMemoryMegabytes * 1024 * 1024 / selected.Count;
+        _perDisplayBytes = (long)config.MaxRingMemoryMegabytes * 1024 * 1024 / selected.Count;
 
-        foreach (var display in selected)
-        {
-            var displayConfig = config.Displays.FirstOrDefault(d =>
-                                    string.Equals(d.DeviceName, display.DeviceName, StringComparison.OrdinalIgnoreCase))
-                                ?? new DisplayConfig { DeviceName = display.DeviceName };
-
-            var framesPerSecond = displayConfig.Fps ?? display.RefreshHz;
-            var captureBackend = config.CaptureBackend;
-            var videoEncoderBackend = config.VideoEncoderBackend;
-            var bitrateMbps = displayConfig.BitrateMbps;
-            var fixedEncodeSize = ResolveFixedEncodeSize(display, displayConfig);
-
-            _recorders.Add(new DisplayRecorder<D3DTexture2D>(
-                display, framesPerSecond, config.BufferSeconds, perDisplayBytes,
-                captureFactory: () => DisplayCaptureSourceFactory.Create(captureBackend, _d3d, display),
-                encoderFactory: (width, height) =>
-                    VideoEncoderFactory.Create(videoEncoderBackend, _d3d, width, height, framesPerSecond, bitrateMbps),
-                fixedEncodeSize: fixedEncodeSize));
-        }
+        foreach (var display in selected) _recorders.Add(BuildRecorder(display));
 
         _audio = new AudioEngine(config, EpochQpc);
 
         _watchdog = new Timer(_ => CheckHealth(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
+    /// <summary>Builds one display's recorder from the current config. Shared by construction and a live attach.</summary>
+    private DisplayRecorder<D3DTexture2D> BuildRecorder(DisplayInfo display)
+    {
+        var displayConfig = _config.Displays.FirstOrDefault(d =>
+                                string.Equals(d.MonitorId, display.MonitorId, StringComparison.OrdinalIgnoreCase))
+                            ?? new DisplayConfig { MonitorId = display.MonitorId };
+
+        var framesPerSecond = displayConfig.Fps ?? display.RefreshHz;
+        var captureBackend = _config.CaptureBackend;
+        var videoEncoderBackend = _config.VideoEncoderBackend;
+        var bitrateMbps = displayConfig.BitrateMbps;
+        var fixedEncodeSize = ResolveFixedEncodeSize(display, displayConfig);
+
+        return new DisplayRecorder<D3DTexture2D>(
+            display, framesPerSecond, _config.BufferSeconds, _perDisplayBytes,
+            captureFactory: () => DisplayCaptureSourceFactory.Create(captureBackend, _d3d, display),
+            encoderFactory: (width, height) =>
+                VideoEncoderFactory.Create(videoEncoderBackend, _d3d, width, height, framesPerSecond, bitrateMbps),
+            fixedEncodeSize: fixedEncodeSize);
+    }
+
     /// <summary>
-    /// Watches for the two failures the pipeline cannot recover from in place: the GPU going away
-    /// (driver update, TDR, hardware reset) and the set of displays changing.
+    /// Watches for what the pipeline cannot heal per-display: the GPU going away (driver update,
+    /// TDR, hardware reset), which invalidates every recorder's GPU resources at once and forces a
+    /// full rebuild. Everything else — a capture surface closing, a display leaving or joining the
+    /// selected set, or a display exceeding the configured blank-frame timeout — detaches or attaches
+    /// just that one display's recorder, so every other display's buffer is left alone.
     /// </summary>
     private void CheckHealth()
     {
         if (_disposed) return;
+
+        // Attach/detach can now take longer than the old pure set-comparison (building a recorder
+        // opens a capture source and encoder), so guard against a slow tick still running when the
+        // next one fires rather than letting them interleave.
+        if (Interlocked.CompareExchange(ref _healthCheckRunning, 1, 0) != 0) return;
 
         try
         {
@@ -111,41 +143,114 @@ public sealed class ReplaySession : IDisposable
                 return;
             }
 
-            var closed = _recorders.Where(r => r.IsCaptureClosed).ToList();
-            if (closed.Count > 0)
+            // Windows.Graphics.Capture tears an item down rather than reviving it — seen when a
+            // display is unplugged, powered off, or the system sleeps and resumes. A persistently
+            // black display (see HasExceededBlankTimeout) gets the same treatment: neither can be
+            // healed in place, but neither requires touching any other display either.
+            var now = Clock.Now;
+            var timeoutSeconds = _config.BlankDisplayTimeoutSeconds;
+
+            foreach (var recorder in SnapshotRecorders())
             {
-                // Windows.Graphics.Capture tears an item down rather than reviving it — seen when a
-                // display is unplugged, powered off, or the system sleeps and resumes. There is no
-                // in-place recreation for a closed item, so the whole session must be rebuilt.
-                SignalRecovery($"the capture surface closed for {Describe(closed.Select(r => r.Display.DeviceName).ToList())}");
-                return;
+                if (recorder.IsCaptureClosed)
+                    DetachRecorder(recorder, "its capture surface closed");
+                else if (recorder.HasExceededBlankTimeout(now, timeoutSeconds))
+                    DetachRecorder(recorder, $"it showed nothing but black for over {timeoutSeconds}s");
             }
 
-            // A resolution change is handled inside the recorder; only displays appearing or
-            // disappearing need the session rebuilt, because that changes how many files a save
-            // produces and how the memory cap is divided.
-            var attached = DisplayEnumerator.Enumerate()
-                .Select(d => d.DeviceName)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Reconcile the selected set against whoever is left recording: anything selected but not
+            // currently recorded (a reconnect, or a genuinely new display) gets attached; anything
+            // recorded but no longer selected (removed from Windows, or disabled/dropped from config)
+            // gets detached.
+            var attached = DisplayEnumerator.Enumerate();
+            var selected = SelectDisplays(attached, _config).ToList();
+            var currentMonitorIds = SnapshotRecorders().Select(r => r.Display.MonitorId).ToList();
 
-            var expected = SelectDisplays(DisplayEnumerator.Enumerate(), _config)
-                .Select(d => d.DeviceName)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var (toDetachIds, toAttach) = Reconcile(selected, currentMonitorIds);
 
-            if (!expected.SetEquals(_capturedDeviceNames))
+            foreach (var monitorId in toDetachIds)
             {
-                var added = expected.Except(_capturedDeviceNames).ToList();
-                var removed = _capturedDeviceNames.Except(attached).ToList();
-                SignalRecovery(
-                    $"the displays changed (added: {Describe(added)}, removed: {Describe(removed)})");
+                var recorder = SnapshotRecorders().FirstOrDefault(r =>
+                    string.Equals(r.Display.MonitorId, monitorId, StringComparison.OrdinalIgnoreCase));
+                if (recorder is not null) DetachRecorder(recorder, "it is no longer attached or selected by config");
             }
+
+            foreach (var display in toAttach) AttachRecorder(display);
         }
         catch (Exception ex)
         {
             Log.Error("Session health check failed", ex);
         }
+        finally
+        {
+            Volatile.Write(ref _healthCheckRunning, 0);
+        }
+    }
 
-        static string Describe(List<string> names) => names.Count == 0 ? "none" : string.Join(", ", names);
+    /// <summary>
+    /// Pure reconciliation of the selected display set against whichever monitor ids are currently
+    /// recorded: what should be detached (recorded but no longer selected) and what should be
+    /// attached (selected but not yet recorded). Kept separate from <see cref="CheckHealth"/> so it
+    /// can be unit-tested without a real <see cref="DisplayEnumerator"/> or GPU.
+    /// </summary>
+    internal static (IReadOnlyList<string> ToDetachMonitorIds, IReadOnlyList<DisplayInfo> ToAttach) Reconcile(
+        IReadOnlyList<DisplayInfo> selected, IReadOnlyList<string> currentMonitorIds)
+    {
+        var selectedIds = selected.Select(d => d.MonitorId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var currentIds = currentMonitorIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var toDetach = currentMonitorIds.Where(id => !selectedIds.Contains(id)).ToList();
+        var toAttach = selected.Where(d => !currentIds.Contains(d.MonitorId)).ToList();
+
+        return (toDetach, toAttach);
+    }
+
+    /// <summary>
+    /// Adds a recorder for a newly-selected display without touching any other display's buffer.
+    /// Building the recorder (opens a capture source and encoder) happens outside the lock since it
+    /// can block; only appending to the recorder list is guarded, so this can never race a
+    /// <see cref="Save"/> that is mid-snapshot.
+    /// </summary>
+    private void AttachRecorder(DisplayInfo display)
+    {
+        IDisplayRecorder recorder;
+        try
+        {
+            recorder = BuildRecorder(display);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Could not attach {display.DeviceName}", ex);
+            return;
+        }
+
+        recorder.Start();
+        lock (_saveGate) _recorders.Add(recorder);
+
+        Log.Info($"Attached {display.DeviceName}.");
+        DisplayTopologyChanged?.Invoke($"{display.Label} started capturing.");
+    }
+
+    /// <summary>
+    /// Removes and disposes one display's recorder without touching any other display's buffer.
+    /// Disposal (which can block — tearing down capture and the encoder) happens outside the lock,
+    /// after the recorder has already been removed from the list so nothing else can observe or
+    /// snapshot it mid-teardown.
+    /// </summary>
+    private void DetachRecorder(IDisplayRecorder recorder, string reason)
+    {
+        lock (_saveGate) _recorders.Remove(recorder);
+
+        Log.Warn($"Detaching {recorder.Display.DeviceName}: {reason}.");
+        DisplayTopologyChanged?.Invoke($"{recorder.Display.Label} stopped capturing: {reason}.");
+
+        try { recorder.Dispose(); }
+        catch (Exception ex) { Log.Error($"Failed to dispose the recorder for {recorder.Display.DeviceName}", ex); }
+    }
+
+    private List<IDisplayRecorder> SnapshotRecorders()
+    {
+        lock (_saveGate) return [.._recorders];
     }
 
     private void SignalRecovery(string reason)
@@ -168,10 +273,10 @@ public sealed class ReplaySession : IDisposable
 
         var enabled = config.Displays
             .Where(d => d.Enabled)
-            .Select(d => d.DeviceName)
+            .Select(d => d.MonitorId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var selected = attached.Where(d => enabled.Contains(d.DeviceName)).ToList();
+        var selected = attached.Where(d => enabled.Contains(d.MonitorId)).ToList();
         if (selected.Count > 0) return selected;
 
         Log.Warn("No configured display is currently attached; falling back to all attached displays.");
@@ -207,7 +312,7 @@ public sealed class ReplaySession : IDisposable
     }
 
     /// <summary>Total ring-buffer memory across video and audio, for the UI and the memory cap.</summary>
-    public long BufferedBytes => _recorders.Sum(r => r.BufferedBytes) + _audio.TotalBytes;
+    public long BufferedBytes => SnapshotRecorders().Sum(r => r.BufferedBytes) + _audio.TotalBytes;
 
     /// <summary>
     /// Writes the buffered window: one <c>.mov</c> per display, each carrying every audio track.
@@ -314,7 +419,8 @@ public sealed class ReplaySession : IDisposable
         _disposed = true;
 
         _watchdog.Dispose();
-        foreach (var recorder in _recorders) recorder.Dispose();
+
+        foreach (var recorder in SnapshotRecorders()) recorder.Dispose();
         _audio.Dispose();
         _d3d.Dispose();
     }

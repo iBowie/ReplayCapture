@@ -148,6 +148,7 @@ public partial class App : Application
             {
                 var session = new ReplaySession(config);
                 session.RecoveryRequired += OnRecoveryRequired;
+                session.DisplayTopologyChanged += OnDisplayTopologyChanged;
                 session.Start();
                 return (Session: session, Error: (string?)null);
             }
@@ -218,6 +219,16 @@ public partial class App : Application
     /// displays. Rebuild it rather than leaving a dead buffer that still looks armed.
     /// </summary>
     private void OnRecoveryRequired(string reason) => Dispatcher.UIThread.InvokeAsync(() => RebuildCapture(reason));
+
+    /// <summary>
+    /// One display was attached or detached in place — no rebuild, nothing else was touched. Just
+    /// let the user know their capture composition changed, since it otherwise happens silently.
+    /// </summary>
+    private void OnDisplayTopologyChanged(string reason) => Dispatcher.UIThread.InvokeAsync(() =>
+    {
+        _tray?.Notify("Display capture changed", reason);
+        UpdateStatus();
+    });
 
     /// <summary>
     /// The system woke from sleep. GPU device loss and closed capture items are already caught by

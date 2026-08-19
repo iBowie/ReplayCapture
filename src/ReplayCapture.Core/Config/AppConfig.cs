@@ -30,6 +30,16 @@ public sealed record AppConfig
     /// <summary>Which native API captures each display's frames. See <see cref="CaptureBackend"/>.</summary>
     public CaptureBackend CaptureBackend { get; init; } = CaptureBackend.Dxgi;
 
+    /// <summary>
+    /// Ditch a display's recorder — freeing its capture source, encoder, and ring buffer — once it
+    /// has shown nothing but black frames for this long (e.g. the monitor is off, or disconnected in
+    /// a way that doesn't close the capture surface outright). 0 (the default) never ditches
+    /// automatically. Ditching only detaches that one display; a later reconnect, or an unrelated new
+    /// display appearing, is picked up by the next watchdog tick without disturbing anything else
+    /// already capturing. See <see cref="ReplayCapture.Core.ReplaySession"/>'s attach/detach reconciliation.
+    /// </summary>
+    public int BlankDisplayTimeoutSeconds { get; init; } = 0;
+
     /// <summary>Which engine encodes every display's H.264 stream. See <see cref="VideoEncoderBackend"/>.</summary>
     public VideoEncoderBackend VideoEncoderBackend { get; init; } = VideoEncoderBackend.Nvenc;
 
@@ -164,8 +174,30 @@ public enum VideoEncoderBackend
 
 public sealed record DisplayConfig
 {
-    /// <summary>GDI device name, e.g. <c>\\.\DISPLAY1</c>. Stable enough to survive a reboot.</summary>
-    public required string DeviceName { get; init; }
+    /// <summary>
+    /// The physical monitor's stable PnP device interface path (<see cref="Capture.DisplayInfo.MonitorId"/>),
+    /// not the GDI device name — that ordinal is reassigned by Windows on a hot-plug and would
+    /// otherwise silently apply this display's settings to whatever monitor lands on the same slot.
+    /// <para>
+    /// Deliberately not <c>required</c>: a config.json predating this field (or otherwise missing
+    /// it) must still deserialize, or one stale display entry would fail the whole document and
+    /// quarantine every other setting along with it (audio tracks, hotkey, everything) — it did,
+    /// the first time this shipped. An empty/unrecognized value simply matches no attached display,
+    /// which <see cref="ReplayCapture.Core.ReplaySession"/>'s existing "nothing configured is
+    /// attached" fallback already handles by capturing everything.
+    /// </para>
+    /// <para>
+    /// The <c>init</c> accessor coalesces a null to <c>""</c> itself rather than relying on the
+    /// property initializer above: System.Text.Json's source-generated deserializer sets every
+    /// property it knows about — including ones absent from the JSON, as an explicit <c>null</c> —
+    /// so a plain <c>= ""</c> default is silently overwritten and never actually applies.
+    /// </para>
+    /// </summary>
+    public string MonitorId
+    {
+        get;
+        init => field = value ?? "";
+    } = "";
 
     public bool Enabled { get; init; } = true;
 

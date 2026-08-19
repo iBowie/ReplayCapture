@@ -59,6 +59,14 @@ public sealed class DisplayRecorder<TFrame> : IDisplayRecorder
     private long _resizes;
     private bool _disposed;
 
+    /// <summary>
+    /// QPC tick of the last tick that had a real frame, seeded from the very first tick's
+    /// <c>scheduledQpc</c> whether or not that first tick was real — so a display dead from the
+    /// start starts its blank countdown at recorder start, not at some arbitrary sentinel.
+    /// <see cref="long.MinValue"/> means no tick has landed yet at all.
+    /// </summary>
+    private long _lastRealFrameQpc = long.MinValue;
+
     public DisplayInfo Display { get; }
     public int FramesPerSecond { get; }
 
@@ -90,6 +98,17 @@ public sealed class DisplayRecorder<TFrame> : IDisplayRecorder
 
     /// <summary>How many times the capture side has been re-provisioned for a new native size.</summary>
     public long Resizes => Interlocked.Read(ref _resizes);
+
+    /// <inheritdoc/>
+    public bool HasExceededBlankTimeout(long nowTicks, int timeoutSeconds)
+    {
+        if (timeoutSeconds <= 0) return false;
+
+        var lastReal = Interlocked.Read(ref _lastRealFrameQpc);
+        if (lastReal == long.MinValue) return false;
+
+        return Clock.ToSeconds(nowTicks - lastReal) >= timeoutSeconds;
+    }
 
     /// <param name="captureFactory">Builds the capture source. Called once, at construction time.</param>
     /// <param name="encoderFactory">
@@ -200,6 +219,11 @@ public sealed class DisplayRecorder<TFrame> : IDisplayRecorder
     {
         if (_disposed) return;
 
+        // Seed the blank-timeout baseline on this recorder's very first tick, whether or not that
+        // tick turns out to be real — a display dead from the start should start its countdown at
+        // recorder start, not sit exempt forever because _lastRealFrameQpc was never set.
+        Interlocked.CompareExchange(ref _lastRealFrameQpc, scheduledQpc, long.MinValue);
+
         if (_resizeRequested)
         {
             _resizeRequested = false;
@@ -222,6 +246,7 @@ public sealed class DisplayRecorder<TFrame> : IDisplayRecorder
             frame = capturedFrame;
             if (capturedQpc == _lastCapturedQpc) Interlocked.Increment(ref _duplicateFrames);
             _lastCapturedQpc = capturedQpc;
+            Interlocked.Exchange(ref _lastRealFrameQpc, scheduledQpc);
         }
         else
         {

@@ -11,8 +11,19 @@ namespace ReplayCapture.App.Views;
 
 public sealed partial class DisplayRowViewModel : ObservableObject
 {
-    public required string DeviceName { get; init; }
-    public required string Description { get; init; }
+    public required string MonitorId { get; init; }
+
+    /// <summary>Persisted across saves so a disconnected display still shows something recognizable.</summary>
+    public required string Label { get; init; }
+
+    public bool IsPrimary { get; init; }
+
+    /// <summary>False for a display that is in config but not currently attached.</summary>
+    public bool IsAvailable { get; init; } = true;
+
+    public string Description => Label
+        + (IsPrimary ? "  •  primary" : "")
+        + (IsAvailable ? "" : "  •  not connected");
 
     [ObservableProperty] private bool _enabled = true;
 
@@ -21,12 +32,23 @@ public sealed partial class DisplayRowViewModel : ObservableObject
 
     [ObservableProperty] private int _bitrateMbps = 40;
 
+    /// <summary>Blank means "native" for both — same freeform convention as <see cref="Fps"/>.</summary>
+    [ObservableProperty] private string _captureWidth = "";
+    [ObservableProperty] private string _captureHeight = "";
+
+    /// <summary>True when exactly one of <see cref="CaptureWidth"/>/<see cref="CaptureHeight"/> is set.</summary>
+    public bool HasPartialResolutionOverride =>
+        string.IsNullOrWhiteSpace(CaptureWidth) != string.IsNullOrWhiteSpace(CaptureHeight);
+
     public DisplayConfig ToConfig() => new()
     {
-        DeviceName = DeviceName,
+        MonitorId = MonitorId,
         Enabled = Enabled,
         Fps = int.TryParse(Fps, out var parsed) && parsed > 0 ? parsed : null,
         BitrateMbps = Math.Clamp(BitrateMbps, 1, 500),
+        CaptureWidth = int.TryParse(CaptureWidth, out var width) && width > 0 ? width : null,
+        CaptureHeight = int.TryParse(CaptureHeight, out var height) && height > 0 ? height : null,
+        Label = Label,
     };
 }
 
@@ -112,6 +134,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _showOverlayIndicator;
     [ObservableProperty] private OverlayCorner _overlayCorner;
     [ObservableProperty] private int _maxRingMemoryMegabytes;
+    [ObservableProperty] private int _blankDisplayTimeoutSeconds;
     [ObservableProperty] private CaptureBackend _captureBackend;
     [ObservableProperty] private VideoEncoderBackend _videoEncoderBackend;
     [ObservableProperty] private string? _validationError;
@@ -156,6 +179,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _showOverlayIndicator = config.ShowOverlayIndicator;
         _overlayCorner = config.OverlayCorner;
         _maxRingMemoryMegabytes = config.MaxRingMemoryMegabytes;
+        _blankDisplayTimeoutSeconds = config.BlankDisplayTimeoutSeconds;
         _captureBackend = config.CaptureBackend;
         _videoEncoderBackend = config.VideoEncoderBackend;
 
@@ -171,19 +195,48 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     private void LoadDisplays(AppConfig config)
     {
+        var attachedMonitorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var display in DisplayEnumerator.Enumerate())
         {
+            attachedMonitorIds.Add(display.MonitorId);
+
             var existing = config.Displays.FirstOrDefault(d =>
-                string.Equals(d.DeviceName, display.DeviceName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(d.MonitorId, display.MonitorId, StringComparison.OrdinalIgnoreCase));
 
             Displays.Add(new DisplayRowViewModel
             {
-                DeviceName = display.DeviceName,
-                Description = display.Label + (display.IsPrimary ? "  •  primary" : ""),
+                MonitorId = display.MonitorId,
+                Label = display.Label,
+                IsPrimary = display.IsPrimary,
+                IsAvailable = true,
                 // No config yet means first run, and capturing everything is the useful default.
                 Enabled = existing?.Enabled ?? true,
                 Fps = existing?.Fps?.ToString() ?? "auto",
                 BitrateMbps = existing?.BitrateMbps ?? 40,
+                CaptureWidth = existing?.CaptureWidth?.ToString() ?? "",
+                CaptureHeight = existing?.CaptureHeight?.ToString() ?? "",
+            });
+        }
+
+        // A display can be configured but temporarily disconnected (unplugged, docked laptop closed,
+        // etc.) — still list it so its settings aren't silently dropped from view, and so it isn't
+        // silently dropped from the saved config either (Displays is rebuilt wholesale from this list).
+        foreach (var display in config.Displays)
+        {
+            if (string.IsNullOrEmpty(display.MonitorId) || attachedMonitorIds.Contains(display.MonitorId))
+                continue;
+
+            Displays.Add(new DisplayRowViewModel
+            {
+                MonitorId = display.MonitorId,
+                Label = string.IsNullOrWhiteSpace(display.Label) ? display.MonitorId : display.Label,
+                IsAvailable = false,
+                Enabled = display.Enabled,
+                Fps = display.Fps?.ToString() ?? "auto",
+                BitrateMbps = display.BitrateMbps,
+                CaptureWidth = display.CaptureWidth?.ToString() ?? "",
+                CaptureHeight = display.CaptureHeight?.ToString() ?? "",
             });
         }
     }
@@ -364,6 +417,19 @@ public sealed partial class SettingsViewModel : ObservableObject
             return null;
         }
 
+        var partialResolution = Displays.FirstOrDefault(d => d.Enabled && d.HasPartialResolutionOverride);
+        if (partialResolution is not null)
+        {
+            ValidationError = $"{partialResolution.Description}: set both width and height, or leave both blank for native.";
+            return null;
+        }
+
+        if (BlankDisplayTimeoutSeconds < 0)
+        {
+            ValidationError = "Ditch-after timeout cannot be negative.";
+            return null;
+        }
+
         ValidationError = null;
 
         return _original with
@@ -376,6 +442,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             ShowOverlayIndicator = ShowOverlayIndicator,
             OverlayCorner = OverlayCorner,
             MaxRingMemoryMegabytes = Math.Clamp(MaxRingMemoryMegabytes, 256, 32768),
+            BlankDisplayTimeoutSeconds = BlankDisplayTimeoutSeconds,
             CaptureBackend = CaptureBackend,
             VideoEncoderBackend = VideoEncoderBackend,
             Displays = [.. Displays.Select(d => d.ToConfig())],

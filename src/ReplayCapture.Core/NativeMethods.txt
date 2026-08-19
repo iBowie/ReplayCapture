@@ -16,6 +16,9 @@ GetMonitorInfoW
 MONITORINFOEXW
 EnumDisplaySettingsW
 MonitorFromWindow
+EnumDisplayDevicesW
+DISPLAY_DEVICEW
+EDD_GET_DEVICE_INTERFACE_NAME
 
 // --- Audio: WASAPI core ---
 // IMMDeviceEnumerator, IMMDevice, IMMDeviceCollection, IMMNotificationClient, IAudioClient,

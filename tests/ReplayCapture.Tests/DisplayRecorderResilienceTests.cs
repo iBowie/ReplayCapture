@@ -1,6 +1,7 @@
 using ReplayCapture.Core;
 using ReplayCapture.Core.Capture;
 using ReplayCapture.Core.Encoders;
+using ReplayCapture.Core.Timing;
 
 namespace ReplayCapture.Tests;
 
@@ -17,6 +18,7 @@ public class DisplayRecorderResilienceTests
     private static DisplayInfo MakeDisplay(int width, int height) => new()
     {
         DeviceName = @"\\.\DISPLAY1",
+        MonitorId = "monitor-1",
         MonitorHandle = 1,
         AdapterDescription = "Fake Adapter",
         Left = 0,
@@ -169,6 +171,66 @@ public class DisplayRecorderResilienceTests
         // resolution change that may never come.
         Assert.Equal(2560, encoder.LastNotifiedWidth);
         Assert.Equal(1440, encoder.LastNotifiedHeight);
+    }
+
+    [Fact]
+    public void HasExceededBlankTimeout_is_false_when_disabled()
+    {
+        var capture = new FakeCaptureSource(new FrameSize(1920, 1080)) { HasSignal = false };
+        using var recorder = new DisplayRecorder<object>(
+            MakeDisplay(1920, 1080), framesPerSecond: 60, bufferSeconds: 10, memoryLimitBytes: 1024 * 1024,
+            captureFactory: () => capture,
+            encoderFactory: (_, _) => new FakeEncoder(1920, 1080));
+
+        recorder.OnTick(frameIndex: 0, scheduledQpc: 1000);
+
+        Assert.False(recorder.HasExceededBlankTimeout(nowTicks: long.MaxValue, timeoutSeconds: 0));
+    }
+
+    [Fact]
+    public void HasExceededBlankTimeout_is_false_before_any_tick_has_landed()
+    {
+        var capture = new FakeCaptureSource(new FrameSize(1920, 1080)) { HasSignal = false };
+        using var recorder = new DisplayRecorder<object>(
+            MakeDisplay(1920, 1080), framesPerSecond: 60, bufferSeconds: 10, memoryLimitBytes: 1024 * 1024,
+            captureFactory: () => capture,
+            encoderFactory: (_, _) => new FakeEncoder(1920, 1080));
+
+        Assert.False(recorder.HasExceededBlankTimeout(nowTicks: long.MaxValue, timeoutSeconds: 10));
+    }
+
+    [Fact]
+    public void HasExceededBlankTimeout_starts_counting_from_the_first_tick_even_when_its_black()
+    {
+        var capture = new FakeCaptureSource(new FrameSize(1920, 1080)) { HasSignal = false };
+        using var recorder = new DisplayRecorder<object>(
+            MakeDisplay(1920, 1080), framesPerSecond: 60, bufferSeconds: 10, memoryLimitBytes: 1024 * 1024,
+            captureFactory: () => capture,
+            encoderFactory: (_, _) => new FakeEncoder(1920, 1080));
+
+        recorder.OnTick(frameIndex: 0, scheduledQpc: 0);
+
+        Assert.False(recorder.HasExceededBlankTimeout(Clock.FromSeconds(9), timeoutSeconds: 10));
+        Assert.True(recorder.HasExceededBlankTimeout(Clock.FromSeconds(10), timeoutSeconds: 10));
+    }
+
+    [Fact]
+    public void A_real_frame_arriving_resets_the_blank_timeout_countdown()
+    {
+        var capture = new FakeCaptureSource(new FrameSize(1920, 1080)) { HasSignal = false };
+        using var recorder = new DisplayRecorder<object>(
+            MakeDisplay(1920, 1080), framesPerSecond: 60, bufferSeconds: 10, memoryLimitBytes: 1024 * 1024,
+            captureFactory: () => capture,
+            encoderFactory: (_, _) => new FakeEncoder(1920, 1080));
+
+        recorder.OnTick(frameIndex: 0, scheduledQpc: 0);
+        Assert.True(recorder.HasExceededBlankTimeout(Clock.FromSeconds(10), timeoutSeconds: 10));
+
+        capture.HasSignal = true;
+        recorder.OnTick(frameIndex: 1, scheduledQpc: Clock.FromSeconds(10));
+
+        Assert.False(recorder.HasExceededBlankTimeout(Clock.FromSeconds(19), timeoutSeconds: 10));
+        Assert.True(recorder.HasExceededBlankTimeout(Clock.FromSeconds(20), timeoutSeconds: 10));
     }
 
     private sealed class FakeCaptureSource(FrameSize initialSize) : IDisplayCaptureSource<object>

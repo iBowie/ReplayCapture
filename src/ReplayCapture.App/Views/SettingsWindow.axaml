@@ -32,7 +32,7 @@
             <!-- ============================ General ============================ -->
             <TabItem Header="General">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <Grid Margin="14" ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                    <Grid Margin="14" ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Buffer length (seconds)" />
                         <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
@@ -59,39 +59,46 @@
                         <TextBox Grid.Row="3" Grid.Column="1" Width="80" HorizontalAlignment="Left" Margin="0,4"
                                  Text="{Binding MaxRingMemoryMegabytes}" />
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Indicator corner" />
-                        <ComboBox Grid.Row="4" Grid.Column="1" Width="160" HorizontalAlignment="Left" Margin="0,4"
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Ditch black display after (s)" />
+                        <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                            <TextBox Width="80" Text="{Binding BlankDisplayTimeoutSeconds}" />
+                            <TextBlock Margin="12,0,0,0" Classes="hint"
+                                       Text="0 = never. Frees that display's capture and encoder resources once it has shown nothing but black this long — a reconnect, or a new display, is picked up automatically without affecting anything else being captured." />
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Indicator corner" />
+                        <ComboBox Grid.Row="5" Grid.Column="1" Width="160" HorizontalAlignment="Left" Margin="0,4"
                                   ItemsSource="{Binding OverlayCorners}"
                                   SelectedItem="{Binding OverlayCorner}" />
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Capture backend" />
-                        <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Capture backend" />
+                        <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
                             <ComboBox Width="120" ItemsSource="{Binding CaptureBackends}"
                                       SelectedItem="{Binding CaptureBackend}" />
                         </StackPanel>
-                        <TextBlock Grid.Row="6" Grid.Column="1" Margin="0,0,0,8" Classes="hint"
+                        <TextBlock Grid.Row="7" Grid.Column="1" Margin="0,0,0,8" Classes="hint"
                                    Text="Dxgi (Desktop Duplication) delivers a high-refresh display's full native rate but runs a polling thread per display that never fully idles. Wgc (Windows.Graphics.Capture) is event-driven and costs nothing while the screen is static, but was measured capping delivery around 50 fps on a 200Hz panel regardless of load — fine for 60Hz-or-lower or mostly-idle displays, wrong for a high-refresh one." />
 
-                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Encoder" />
-                        <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Encoder" />
+                        <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
                             <ComboBox Width="120" ItemsSource="{Binding VideoEncoderBackends}"
                                       SelectedItem="{Binding VideoEncoderBackend}" />
                         </StackPanel>
-                        <TextBlock Grid.Row="8" Grid.Column="1" Margin="0,0,0,8" Classes="hint"
+                        <TextBlock Grid.Row="9" Grid.Column="1" Margin="0,0,0,8" Classes="hint"
                                    Text="Nvenc and Amf both encode entirely on the GPU and need the matching vendor's hardware encoder (NVIDIA NVENC / AMD VCE). X264 encodes on the CPU instead — it works on any machine, but costs a GPU-to-CPU frame copy plus the CPU time to encode, so expect higher CPU usage and a lower sustainable frame rate than either hardware option." />
 
-                        <CheckBox Grid.Row="9" Grid.Column="1" Content="Start with Windows (elevated, via Task Scheduler)"
+                        <CheckBox Grid.Row="10" Grid.Column="1" Content="Start with Windows (elevated, via Task Scheduler)"
                                   IsChecked="{Binding StartWithWindows}" />
-                        <CheckBox Grid.Row="10" Grid.Column="1" Content="Show the armed indicator on screen"
+                        <CheckBox Grid.Row="11" Grid.Column="1" Content="Show the armed indicator on screen"
                                   IsChecked="{Binding ShowOverlayIndicator}" />
-                        <CheckBox Grid.Row="11" Grid.Column="1" Content="Play a sound when a clip is saved"
+                        <CheckBox Grid.Row="12" Grid.Column="1" Content="Play a sound when a clip is saved"
                                   IsChecked="{Binding PlaySoundOnSave}" />
 
-                        <TextBlock Grid.Row="12" Grid.Column="1" Margin="0,14,0,0" Classes="hint"
+                        <TextBlock Grid.Row="13" Grid.Column="1" Margin="0,14,0,0" Classes="hint"
                                    Text="The indicator is excluded from capture, so it never appears in saved clips. It cannot draw over a true fullscreen-exclusive game — the tray icon and save sound cover that case." />
 
-                        <TextBlock Grid.Row="13" Grid.Column="1" Margin="0,10,0,0" Classes="hint"
-                                   Text="Changing the buffer length, displays, audio tracks, capture backend or encoder restarts the capture pipeline. The buffer is empty for a few seconds afterwards." />
+                        <TextBlock Grid.Row="14" Grid.Column="1" Margin="0,10,0,0" Classes="hint"
+                                   Text="Changing the buffer length, displays, audio tracks, capture backend or encoder restarts the capture pipeline. The buffer is empty for a few seconds afterwards. The ditch-after timeout applies live." />
                     </Grid>
                 </ScrollViewer>
             </TabItem>
@@ -101,24 +108,30 @@
                 <Grid Margin="14" RowDefinitions="Auto,Auto,*">
 
                     <TextBlock Grid.Row="0" Margin="0,0,0,10" Classes="hint"
-                               Text="Each enabled display is captured as its own video stream at its native resolution and written to its own .mov file. Leave FPS as 'auto' to follow the display's refresh rate." />
+                               Text="Each enabled display is captured as its own video stream and written to its own .mov file. Leave FPS as 'auto' to follow the display's refresh rate; leave Width/Height blank to encode at native resolution, or set both to scale into a fixed size." />
 
-                    <Grid Grid.Row="1" ColumnDefinitions="44,*,80,80" Margin="0,0,0,4">
+                    <Grid Grid.Row="1" ColumnDefinitions="44,*,80,80,70,70" Margin="0,0,0,4">
                         <TextBlock Grid.Column="0" Text="On" FontWeight="SemiBold" />
                         <TextBlock Grid.Column="1" Text="Display" FontWeight="SemiBold" />
                         <TextBlock Grid.Column="2" Text="FPS" FontWeight="SemiBold" />
                         <TextBlock Grid.Column="3" Text="Mbps" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="4" Text="Width" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="5" Text="Height" FontWeight="SemiBold" />
                     </Grid>
 
                     <ScrollViewer Grid.Row="2">
                         <ItemsControl ItemsSource="{Binding Displays}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:DisplayRowViewModel">
-                                    <Grid ColumnDefinitions="44,*,80,80" Margin="0,6">
+                                    <Grid ColumnDefinitions="44,*,80,80,70,70" Margin="0,6">
                                         <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" />
                                         <TextBlock Grid.Column="1" Text="{Binding Description}" VerticalAlignment="Center" />
                                         <TextBox Grid.Column="2" Text="{Binding Fps}" Margin="0,0,8,0" />
-                                        <TextBox Grid.Column="3" Text="{Binding BitrateMbps}" />
+                                        <TextBox Grid.Column="3" Text="{Binding BitrateMbps}" Margin="0,0,8,0" />
+                                        <TextBox Grid.Column="4" Text="{Binding CaptureWidth}" Margin="0,0,8,0"
+                                                 ToolTip.Tip="Native if blank" />
+                                        <TextBox Grid.Column="5" Text="{Binding CaptureHeight}"
+                                                 ToolTip.Tip="Native if blank" />
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>

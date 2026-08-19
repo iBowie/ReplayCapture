@@ -44,6 +44,16 @@ public interface IDisplayRecorder : IDisposable
     long Resizes { get; }
 
     /// <summary>
+    /// True once this recorder has shown nothing but black frames — no real frame has arrived since
+    /// its very first tick, or none has arrived since the last one that did — for at least
+    /// <paramref name="timeoutSeconds"/>. <paramref name="timeoutSeconds"/> &lt;= 0 always returns
+    /// false (the "never ditch" default). <paramref name="nowTicks"/> is taken as a parameter rather
+    /// than read internally so the check is a pure function of its inputs and can be driven with
+    /// synthetic tick values in tests, the same way <c>FramePacer.Resync</c> is.
+    /// </summary>
+    bool HasExceededBlankTimeout(long nowTicks, int timeoutSeconds);
+
+    /// <summary>
     /// Fixed for this recorder's whole lifetime — set once at construction from the display's native
     /// size at the time, and never changed by a later resolution change. See
     /// <see cref="DisplayRecorder{TFrame}"/>'s class remarks for how a resolution change is absorbed
