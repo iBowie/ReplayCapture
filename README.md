@@ -23,6 +23,65 @@ The container choice is load-bearing: **Premiere Pro cannot import MKV at all**,
 -track support in MP4 is unreliable (it frequently exposes only the first track). QuickTime `.mov`
 with multiple tracks is the production standard and imports with no conforming and no re-encode.
 
+## System requirements
+
+### Running it
+
+| | Requirement |
+|---|---|
+| OS | Windows 11 x64, or Windows build **20348+** — what `Directory.Build.props` declares as `SupportedOSPlatformVersion`, and the floor for per-process audio |
+| Rights | **Local administrator.** Not optional — see the next section |
+| CPU | Any x64. No ARM64 build exists (`Platforms`/`PlatformTarget` are `x64`, and NVENC, D3D11 and the FFmpeg native runtime are x64-only) |
+| GPU | Direct3D 11 **feature level 11.0** minimum (`D3DContext` asks for 11.1 and falls back to 11.0), plus a working encoder — see the matrix below |
+| RAM | ~2.5 GB free. `MaxRingMemoryMegabytes` caps the ring buffers at **2048 MB** by default, split across the displays actually captured; measured working set was 369 MB (214 MB of it buffers) for one 1080p60 display with six stems and a 30 s buffer |
+| Disk | ~**370 MB per display per save** at the defaults (60 s at 40 Mbps ≈ 300 MB video, plus six 48 kHz stereo PCM stems ≈ 69 MB). Clips land in `%USERPROFILE%\Videos\Replays` unless `OutputDirectory` says otherwise |
+| .NET | .NET 10 x64 runtime, unless you use the Native AOT publish (`publish_avalonia.bat`), which is self-contained and needs nothing installed |
+
+Nothing else is needed at runtime: FFmpeg ships as native DLLs beside the exe via
+`Sdcb.FFmpeg.runtime.windows-x64`, and there is no external ffmpeg.exe, service, or driver to install.
+
+### Encoder and capture backends
+
+`VideoEncoderBackend` decides what hardware you actually need. It is a whole-machine setting, not
+per-display, because which encoders exist at all is a GPU-vendor fact.
+
+| Backend | Needs | State |
+|---|---|---|
+| `Nvenc` (default) | NVIDIA GPU with an NVENC engine | Verified — an `h264_nvenc` session opens on an RTX 5070. Note NVENC's concurrent-session limit is shared with anything else encoding (Sunshine, OBS, ShadowPlay) |
+| `Amf` | AMD GPU with VCN/AMF | Builds and unit-tests, but **no real encode session has been verified** — no AMD GPU on the dev machine. Run `rcprobe record 5 <dir> dxgi amf` first |
+| `X264` | No specific GPU — CPU-bound | Also unverified beyond build and unit tests. Pays a GPU→CPU round-trip per frame that neither hardware backend does; run `rcprobe record 5 <dir> dxgi x264` before relying on it |
+
+`CaptureBackend` adds no hardware requirement either way: DXGI Desktop Duplication (the default)
+works anywhere D3D11 does, and Windows.Graphics.Capture needs Windows 10 1903+ — but see its
+~50 fps ceiling below before choosing it for a high-refresh display.
+
+### Where the Windows build number actually matters
+
+Per-process loopback — the `proc:` and `group:` audio sources behind the Game, Communications and
+Music stems — is activated through the `VAD\Process_Loopback` virtual device introduced in
+**Windows 10 build 20348**. Consumer Windows 10 tops out at 19045, so in practice these stems mean
+Windows 11 (or Server 2022). On an older build the app still runs and still captures: opening such a
+source throws, `AudioEngine` logs a warning, and that track stays digitally silent rather than
+taking the buffer down with it. Device loopback (`device:`) and microphone (`mic:`) tracks are
+unaffected and work well below 20348.
+
+Displays are unconstrained — every attached display gets its own recorder and its own `.mov`, and
+`MaxRingMemoryMegabytes` is divided by how many are actually captured, so more displays means a
+shorter buffer, not a larger process. All audio is normalised to 48 kHz stereo regardless of what
+the endpoints report.
+
+### Building it
+
+| | Requirement |
+|---|---|
+| SDK | .NET 10 SDK, x64 |
+| OS | Windows — `ReplayCapture.App`, `.Probe` and `.Tests` are Windows-only; `ReplayCapture.Core` also builds a `net10.0` linux-x64 leg for its platform-portable pieces |
+| git | On `PATH` — `Directory.Build.props` derives the version from `git describe` on every non-design-time build (it degrades to `v0.0.0-0-gunknown`, it does not fail) |
+| AOT publish only | Visual Studio or Build Tools with the **"Desktop development with C++"** workload — Native AOT's ilc step shells out to MSVC's `link.exe`, which `publish_avalonia.bat` locates itself via `vswhere` |
+
+`publish.bat` produces a framework-dependent build (the target machine needs the .NET 10 runtime);
+`publish_avalonia.bat` produces the self-contained Native AOT build (it does not).
+
 ## Elevation is a requirement, not a preference
 
 UIPI drops both `RegisterHotKey` delivery and `WH_KEYBOARD_LL` events when a **higher-integrity**
