@@ -53,6 +53,16 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
 {
     private const int LatchBufferCount = 2;
 
+    /// <summary>
+    /// How long a continuous run of <c>DXGI_ERROR_ACCESS_LOST</c> is tolerated before the capture is
+    /// declared dead. Sized for a UAC prompt or the lock screen sitting on the secure desktop for as
+    /// long as a user takes to respond to it, not for the sub-second contention
+    /// <see cref="AcquireDuplication"/>'s own retry budget targets — giving up any sooner than this
+    /// tears the whole recorder down (see <see cref="ReplaySession.CheckHealth"/>) and discards its
+    /// ring buffer for something that resolves itself the moment the prompt closes.
+    /// </summary>
+    private static readonly TimeSpan AccessLostGiveUpAfter = TimeSpan.FromSeconds(60);
+
     private readonly D3DContext _d3d;
     private readonly Lock _duplicationGate = new();
     private readonly Lock _latchGate = new();
@@ -61,13 +71,25 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
     private readonly CursorOverlay _cursorOverlay;
     private readonly ID3D11Texture2D?[] _latchBuffers = new ID3D11Texture2D?[LatchBufferCount];
 
-    private IDXGIOutputDuplication _duplication;
+    /// <summary>
+    /// Null whenever capture has just lost access and not yet re-acquired - see the AccessLost
+    /// handling in <see cref="Run"/> for why disposing this eagerly, rather than holding onto the
+    /// dead interface while trying to acquire a replacement, is required for the replacement to have
+    /// any chance of succeeding.
+    /// </summary>
+    private IDXGIOutputDuplication? _duplication;
     private int _latchWriteIndex;
     private int _latchReadIndex = -1;
     private long _latchQpc;
     private long _framesArrived;
     private bool _disposed;
     private volatile bool _closed;
+
+    /// <summary>
+    /// QPC tick of the first <c>AccessLost</c> in the current unbroken run of them; <see cref="long.MinValue"/>
+    /// while capture is healthy. Only ever touched from the capture thread inside <see cref="_duplicationGate"/>.
+    /// </summary>
+    private long _accessLostSinceQpc = long.MinValue;
 
     // Cursor shape buffer. Only ever touched from the capture thread, inside _duplicationGate, so it
     // needs no lock of its own.
@@ -157,9 +179,34 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
         {
             lock (_duplicationGate)
             {
+                if (_duplication is null)
+                {
+                    // Re-acquiring after AccessLost disposed the old interface - see there for why
+                    // that disposal has to happen before this is even attempted.
+                    var recovered = TryReacquireDuplication();
+
+                    if (!recovered && ShouldGiveUpOnAccessLost(_accessLostSinceQpc, Clock.Now, AccessLostGiveUpAfter))
+                    {
+                        Log.Warn($"{Display.DeviceName}: could not recover from access loss after " +
+                                 $"{AccessLostGiveUpAfter.TotalSeconds:0}s; giving up.");
+                        _closed = true;
+                        break;
+                    }
+
+                    // Paced unconditionally, including a "successful" reacquire: DuplicateOutput
+                    // touches the hardware cursor plane, so hammering it with no delay between
+                    // attempts during a flap (reacquire succeeds, then the very next AcquireNextFrame
+                    // is access-lost again) spins the CPU and visibly flickers the real mouse cursor,
+                    // not just the one this class composites into the recording.
+                    Thread.Sleep(250);
+                    continue;
+                }
+
+                var duplication = _duplication;
+
                 // Zero timeout, never blocking - see the class remarks for why a blocking wait here
                 // starved the encoder thread on the shared device even at a few milliseconds.
-                var result = _duplication.AcquireNextFrame(0, out var frameInfo, out var desktopResource);
+                var result = duplication.AcquireNextFrame(0, out var frameInfo, out var desktopResource);
 
                 if (result == Vortice.DXGI.ResultCode.WaitTimeout)
                 {
@@ -167,29 +214,38 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
                     continue;
                 }
 
-                if (result == Vortice.DXGI.ResultCode.AccessLost)
-                {
-                    // Seen on resolution/rotation changes, lock screen, secure-desktop UAC prompts,
-                    // and a fullscreen-exclusive app grabbing the output. Only option is to tear down
-                    // and re-acquire; there is no "resume in place".
-                    if (!TryRecoverFromAccessLost())
-                    {
-                        _closed = true;
-                        break;
-                    }
-                    continue;
-                }
-
                 if (result.Failure)
                 {
+                    // DXGI_ERROR_ACCESS_LOST is the documented code for resolution/rotation changes,
+                    // lock screen, secure-desktop UAC prompts, and a fullscreen-exclusive app grabbing
+                    // the output - but a secure-desktop transition has also been observed (RTX 50-series,
+                    // driver-dependent) to surface as plain DXGI_ERROR_INVALID_CALL instead. Both, and
+                    // anything else AcquireNextFrame can fail with past WaitTimeout, get the same
+                    // treatment: there is no "resume in place", only tear the interface down and
+                    // re-acquire. Treating only the specific AccessLost code as recoverable and looping
+                    // forever on anything else (the previous behaviour) is what turned this failure mode
+                    // into a permanent freeze - AcquireNextFrame kept being called on the same dead
+                    // interface, which can only ever fail the same way again.
                     Log.Warn($"AcquireNextFrame failed for {Display.DeviceName}: {result}");
-                    Thread.Sleep(50);
+
+                    // Dispose immediately: DXGI will not hand out a new duplication for this output
+                    // while any interface object for it - even a dead one - is still alive, so holding
+                    // onto this one while trying to acquire a replacement would make every future
+                    // attempt fail forever. The branch above re-acquires on the next iteration.
+                    //
+                    // _accessLostSinceQpc is cleared only once a real frame is actually processed (see
+                    // ProcessFrame), never merely because a reacquire succeeded - a flapping duplication
+                    // (reacquire succeeds, immediately fails again) must not get its give-up countdown
+                    // reset every time, or a sustained flap would never give up.
+                    if (_accessLostSinceQpc == long.MinValue) _accessLostSinceQpc = Clock.Now;
+                    duplication.Dispose();
+                    _duplication = null;
                     continue;
                 }
 
                 try
                 {
-                    ProcessFrame(frameInfo, desktopResource);
+                    ProcessFrame(duplication, frameInfo, desktopResource);
                 }
                 catch (Exception ex)
                 {
@@ -198,7 +254,7 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
                 finally
                 {
                     desktopResource.Dispose();
-                    _duplication.ReleaseFrame();
+                    duplication.ReleaseFrame();
                 }
             }
         }
@@ -206,22 +262,34 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
         Log.Info($"Capture stopped for {Display.DeviceName} after {FramesArrived} frames.");
     }
 
-    /// <summary>Must be called with <see cref="_duplicationGate"/> already held.</summary>
-    private bool TryRecoverFromAccessLost()
-    {
-        _duplication.Dispose();
+    /// <summary>
+    /// True once an unbroken run of <c>AccessLost</c> has lasted longer than <paramref name="giveUpAfter"/>.
+    /// Pulled out as a pure function purely so the give-up policy is unit-testable without a real
+    /// DXGI device.
+    /// </summary>
+    internal static bool ShouldGiveUpOnAccessLost(long accessLostSinceQpc, long nowQpc, TimeSpan giveUpAfter) =>
+        accessLostSinceQpc != long.MinValue && Clock.ToSeconds(nowQpc - accessLostSinceQpc) >= giveUpAfter.TotalSeconds;
 
+    /// <summary>
+    /// Must be called with <see cref="_duplicationGate"/> already held and <see cref="_duplication"/>
+    /// already null.
+    /// </summary>
+    private bool TryReacquireDuplication()
+    {
+        IDXGIOutputDuplication next;
         try
         {
-            _duplication = AcquireDuplication();
+            next = Duplicate();
         }
         catch (Exception ex)
         {
-            Log.Warn($"Could not re-acquire duplication for {Display.DeviceName}; giving up. {ex.Message}");
+            Log.Warn($"Could not re-acquire duplication for {Display.DeviceName} yet: {ex.Message}");
             return false;
         }
 
-        var desc = _duplication.Description;
+        _duplication = next;
+
+        var desc = next.Description;
         var newSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
 
         if (newSize.Width != ContentSize.Width || newSize.Height != ContentSize.Height)
@@ -241,11 +309,13 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
     /// <summary>
     /// Calls <see cref="Duplicate"/>, retrying transient failures — most commonly <c>E_ACCESSDENIED</c>
     /// from a secure desktop (lock screen, UAC, a logon that hasn't finished settling) or a
-    /// fullscreen-exclusive app briefly holding the output. Shared by the constructor and
-    /// <see cref="TryRecoverFromAccessLost"/> so the very first acquire gets the same resilience as
-    /// every later re-acquire; without it, a race at process startup — e.g. this app's own Task
-    /// Scheduler logon entry launching before the desktop finishes compositing — throws once and
-    /// never gets a second chance.
+    /// fullscreen-exclusive app briefly holding the output — over a short, bounded window. Used by
+    /// the constructor and <see cref="Recreate"/>, both of which need a single call to either succeed
+    /// or definitively fail rather than being paced externally. <see cref="TryRecoverFromAccessLost"/>
+    /// deliberately does *not* use this: its caller (<see cref="Run"/>) already retries in a loop over
+    /// a much longer window (<see cref="AccessLostGiveUpAfter"/>) to survive a UAC prompt sitting on
+    /// the secure desktop, and stacking this method's own multi-second retry underneath that would
+    /// make each outer attempt block for that long even once the real problem has resolved.
     /// </summary>
     private IDXGIOutputDuplication AcquireDuplication()
     {
@@ -269,11 +339,16 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
     }
 
     /// <summary>Must be called with <see cref="_duplicationGate"/> already held.</summary>
-    private void ProcessFrame(OutduplFrameInfo frameInfo, IDXGIResource desktopResource)
+    private void ProcessFrame(IDXGIOutputDuplication duplication, OutduplFrameInfo frameInfo, IDXGIResource desktopResource)
     {
+        // A real frame only ever reaches here once AcquireNextFrame has actually succeeded, so this
+        // is the one place safe to declare the access-lost episode over - see the AccessLost branch
+        // in Run() for why a bare successful reacquire isn't enough on its own.
+        _accessLostSinceQpc = long.MinValue;
+
         using var source = desktopResource.QueryInterface<ID3D11Texture2D>();
 
-        UpdateCursorShapeIfChanged(frameInfo);
+        UpdateCursorShapeIfChanged(duplication, frameInfo);
         if (frameInfo.LastMouseUpdateTime != 0)
         {
             _cursorVisible = frameInfo.PointerPosition.Visible;
@@ -307,7 +382,7 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
     /// Fetches new pointer shape data when Desktop Duplication reports it changed. Shape changes far
     /// less often than position, so this is skipped whenever <c>PointerShapeBufferSize</c> is zero.
     /// </summary>
-    private void UpdateCursorShapeIfChanged(OutduplFrameInfo frameInfo)
+    private void UpdateCursorShapeIfChanged(IDXGIOutputDuplication duplication, OutduplFrameInfo frameInfo)
     {
         if (frameInfo.PointerShapeBufferSize == 0) return;
 
@@ -319,7 +394,7 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
         {
             fixed (byte* p = _cursorShapeBuffer)
             {
-                var result = _duplication.GetFramePointerShape((uint)size, (IntPtr)p, out _, out var shapeInfo);
+                var result = duplication.GetFramePointerShape((uint)size, (IntPtr)p, out _, out var shapeInfo);
                 if (result.Failure)
                 {
                     Log.Warn($"GetFramePointerShape failed for {Display.DeviceName}: {result}");
@@ -438,9 +513,11 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
         {
             // Acquire the replacement before disposing the current one: AcquireDuplication retries
             // transient failures but can still exhaust them, and if it does, leaving the working
-            // duplication in place beats leaving this source with none at all.
+            // duplication in place beats leaving this source with none at all. Unlike the AccessLost
+            // path in Run(), _duplication here is still alive and healthy - just needs replacing for
+            // the new size - so there is no dead interface blocking the new DuplicateOutput call.
             var next = AcquireDuplication();
-            _duplication.Dispose();
+            _duplication?.Dispose();
             _duplication = next;
             var desc = _duplication.Description;
             ContentSize = new FrameSize((int)desc.ModeDescription.Width, (int)desc.ModeDescription.Height);
@@ -457,7 +534,7 @@ public sealed class DxgiDisplayCaptureSource : IDisplayCaptureSource<ID3D11Textu
         _cancellation.Cancel();
         _thread.Join(TimeSpan.FromSeconds(2));
 
-        lock (_duplicationGate) _duplication.Dispose();
+        lock (_duplicationGate) _duplication?.Dispose();
 
         lock (_latchGate)
         {
