@@ -238,6 +238,8 @@ public sealed class TrayController : IDisposable
         PInvoke.AppendMenu(menu, MENU_ITEM_FLAGS.MF_STRING, CmdOpenLogs, "Open log folder");
         PInvoke.AppendMenu(menu, MENU_ITEM_FLAGS.MF_SEPARATOR, 0, (string?)null);
         PInvoke.AppendMenu(menu, MENU_ITEM_FLAGS.MF_STRING, CmdExit, "Exit");
+        PInvoke.AppendMenu(menu, MENU_ITEM_FLAGS.MF_SEPARATOR, 0, (string?)null);
+        PInvoke.AppendMenu(menu, MENU_ITEM_FLAGS.MF_STRING | MENU_ITEM_FLAGS.MF_GRAYED, 0, $"ReplayCapture v{VersionInfo.Display}");
 
         return menu;
     }

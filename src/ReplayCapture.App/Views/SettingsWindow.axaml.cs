@@ -22,6 +22,7 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         _viewModel = new SettingsViewModel(config);
         DataContext = _viewModel;
+        Title = $"ReplayCapture settings — v{VersionInfo.Display}";
     }
 
     /// <summary>

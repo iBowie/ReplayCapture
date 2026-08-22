@@ -42,4 +42,67 @@
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
+  <!--
+    Version comes from "git describe", not a hand-maintained number: it yields e.g.
+    "v0.1.0-alpha-9-gcd1e75d" (tag, commits-since-tag, short hash, and a "dirty" suffix when the
+    working tree has uncommitted changes). No Nerdbank.GitVersioning or similar package — same
+    "hand-roll the OS/tooling integration instead of pulling a wrapper" call as the tray icon and
+    global hotkeys (see TrayController, GlobalHotkeyService): this is a five-line string split, not
+    worth a new restore-time dependency. AssemblyVersion is pinned to the tag's Major.Minor.Patch so
+    it doesn't change every commit (nothing here does binding-redirect-style versioning); FileVersion
+    and InformationalVersion carry the commit count and hash so two builds of the same tag are still
+    distinguishable. Skipped for design-time builds (IntelliSense) since it shells out to git on
+    every evaluation. IncludeSourceRevisionInInformationalVersion is turned off below because the
+    SDK's own version of this feature would otherwise append a second, full-length "+&lt;commit&gt;"
+    of its own after ours.
+  -->
+  <PropertyGroup>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <Target Name="SetVersionFromGit" BeforeTargets="BeforeBuild;GetAssemblyVersion;CoreCompile"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(_GitVersionSet)' != 'true'">
+    <Exec Command="git describe --tags --long --always --dirty"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="low"
+          ContinueOnError="WarnAndContinue"
+          WorkingDirectory="$(MSBuildThisFileDirectory)">
+      <Output TaskParameter="ConsoleOutput" ItemName="_GitDescribeLines" />
+    </Exec>
+
+    <PropertyGroup>
+      <_GitDescribe>@(_GitDescribeLines)</_GitDescribe>
+      <_GitDescribe Condition="'$(_GitDescribe)' == ''">v0.0.0-0-gunknown</_GitDescribe>
+
+      <_GitDirty Condition="$(_GitDescribe.EndsWith('-dirty'))">true</_GitDirty>
+      <_GitDescribe Condition="'$(_GitDirty)' == 'true'">$(_GitDescribe.Substring(0, $([MSBuild]::Subtract($(_GitDescribe.Length), 6))))</_GitDescribe>
+
+      <!-- "v0.1.0-alpha-9-gcd1e75d" -> hash "cd1e75d", tag+count "v0.1.0-alpha-9" -->
+      <_GitHashIdx>$(_GitDescribe.LastIndexOf('-'))</_GitHashIdx>
+      <_GitHash>$(_GitDescribe.Substring($([MSBuild]::Add($(_GitHashIdx), 2))))</_GitHash>
+      <_GitTagAndCount>$(_GitDescribe.Substring(0, $(_GitHashIdx)))</_GitTagAndCount>
+
+      <!-- "v0.1.0-alpha-9" -> count "9", tag "v0.1.0-alpha" -->
+      <_GitCountIdx>$(_GitTagAndCount.LastIndexOf('-'))</_GitCountIdx>
+      <_GitCommitCount>$(_GitTagAndCount.Substring($([MSBuild]::Add($(_GitCountIdx), 1))))</_GitCommitCount>
+      <_GitTag>$(_GitTagAndCount.Substring(0, $(_GitCountIdx)))</_GitTag>
+      <_GitTag Condition="$(_GitTag.StartsWith('v'))">$(_GitTag.Substring(1))</_GitTag>
+
+      <!-- "0.1.0-alpha" -> numeric "0.1.0", prerelease "alpha" (tag may have no prerelease at all) -->
+      <_GitTagDashIdx>$(_GitTag.IndexOf('-'))</_GitTagDashIdx>
+      <_GitNumericVersion Condition="'$(_GitTagDashIdx)' != '-1'">$(_GitTag.Substring(0, $(_GitTagDashIdx)))</_GitNumericVersion>
+      <_GitNumericVersion Condition="'$(_GitNumericVersion)' == ''">$(_GitTag)</_GitNumericVersion>
+      <_GitPrerelease Condition="'$(_GitTagDashIdx)' != '-1'">$(_GitTag.Substring($([MSBuild]::Add($(_GitTagDashIdx), 1))))</_GitPrerelease>
+
+      <InformationalVersion Condition="'$(_GitPrerelease)' == ''">$(_GitNumericVersion)+$(_GitCommitCount).$(_GitHash)</InformationalVersion>
+      <InformationalVersion Condition="'$(_GitPrerelease)' != ''">$(_GitNumericVersion)-$(_GitPrerelease)+$(_GitCommitCount).$(_GitHash)</InformationalVersion>
+      <InformationalVersion Condition="'$(_GitDirty)' == 'true'">$(InformationalVersion).dirty</InformationalVersion>
+
+      <Version>$(_GitNumericVersion).$(_GitCommitCount)</Version>
+      <AssemblyVersion>$(_GitNumericVersion).0</AssemblyVersion>
+      <FileVersion>$(_GitNumericVersion).$(_GitCommitCount)</FileVersion>
+      <_GitVersionSet>true</_GitVersionSet>
+    </PropertyGroup>
+  </Target>
+
 </Project>
