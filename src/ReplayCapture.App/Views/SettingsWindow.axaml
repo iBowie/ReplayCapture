@@ -32,7 +32,7 @@
             <!-- ============================ General ============================ -->
             <TabItem Header="General">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <Grid Margin="14" ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                    <Grid Margin="14" ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Buffer length (seconds)" />
                         <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
@@ -91,14 +91,21 @@
                                   IsChecked="{Binding StartWithWindows}" />
                         <CheckBox Grid.Row="11" Grid.Column="1" Content="Show the armed indicator on screen"
                                   IsChecked="{Binding ShowOverlayIndicator}" />
-                        <CheckBox Grid.Row="12" Grid.Column="1" Content="Play a sound when a clip is saved"
+                        <CheckBox Grid.Row="12" Grid.Column="1" Content="Show notifications as an on-screen overlay instead of tray balloons"
+                                  IsChecked="{Binding UseOverlayNotifications}" />
+                        <CheckBox Grid.Row="13" Grid.Column="1" Content="Play a sound when a clip is saved"
                                   IsChecked="{Binding PlaySoundOnSave}" />
+                        <CheckBox Grid.Row="14" Grid.Column="1" Content="Keep ReplayCapture's own sounds out of the desktop audio tracks"
+                                  IsChecked="{Binding ExcludeOwnAudioFromLoopback}" />
 
-                        <TextBlock Grid.Row="13" Grid.Column="1" Margin="0,14,0,0" Classes="hint"
-                                   Text="The indicator is excluded from capture, so it never appears in saved clips. It cannot draw over a true fullscreen-exclusive game — the tray icon and save sound cover that case." />
+                        <TextBlock Grid.Row="15" Grid.Column="1" Margin="0,6,0,0" Classes="hint"
+                                   Text="Without that last option the save chime is mixed into the default playback device before it is captured, so it turns up in the next clip saved within the buffer window. With it on, 'device:render:default' is captured per-process with this app excluded: audio sent to a second output device also lands on those tracks, and Windows' own system sounds may not." />
 
-                        <TextBlock Grid.Row="14" Grid.Column="1" Margin="0,10,0,0" Classes="hint"
-                                   Text="Changing the buffer length, displays, audio tracks, capture backend or encoder restarts the capture pipeline. The buffer is empty for a few seconds afterwards. The ditch-after timeout applies live." />
+                        <TextBlock Grid.Row="16" Grid.Column="1" Margin="0,10,0,0" Classes="hint"
+                                   Text="The indicator and the notification overlay are both excluded from capture, so neither ever appears in saved clips. Neither can draw over a true fullscreen-exclusive game — the save sound covers that case." />
+
+                        <TextBlock Grid.Row="17" Grid.Column="1" Margin="0,10,0,0" Classes="hint"
+                                   Text="Changing the buffer length, displays, audio tracks, capture backend, encoder or the own-sounds exclusion restarts the capture pipeline. The buffer is empty for a few seconds afterwards. The ditch-after timeout applies live." />
                     </Grid>
                 </ScrollViewer>
             </TabItem>

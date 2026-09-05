@@ -16,6 +16,11 @@ namespace ReplayCapture.Core.Audio;
 /// <c>ActivateAudioInterfaceAsync</c>, with the target process id passed in a PROPVARIANT blob, and
 /// the resulting <c>IAudioClient</c> arrives on a COM callback rather than as a return value.
 /// </para>
+/// <para>
+/// The same device also runs in reverse — everything <i>except</i> a target process tree — which is
+/// what <see cref="CreateExcludingSelf"/> uses to capture the desktop mix without the app's own
+/// save chime in it.
+/// </para>
 /// </summary>
 public sealed unsafe partial class ProcessLoopbackSource : IAudioSource
 {
@@ -35,11 +40,33 @@ public sealed unsafe partial class ProcessLoopbackSource : IAudioSource
 
     public event Action<long, ReadOnlyMemory<float>>? SamplesReady;
 
-    public ProcessLoopbackSource(uint processId, string executableName, bool includeProcessTree = true)
+    /// <summary>
+    /// Captures everything the system plays <i>except</i> this process and its children — the same
+    /// virtual device as a per-process capture, run in EXCLUDE mode with our own pid as the target.
+    /// <para>
+    /// This is what keeps the app's own save chime out of the desktop stems. A WASAPI endpoint
+    /// loopback captures the endpoint's final mix, which by definition already includes anything
+    /// this app played; there is no per-stream opt-out on that path, so the exclusion has to happen
+    /// on the capture side instead.
+    /// </para>
+    /// </summary>
+    public static ProcessLoopbackSource CreateExcludingSelf(string name) =>
+        new((uint)Environment.ProcessId,
+            Path.GetFileName(Environment.ProcessPath) ?? "ReplayCapture.exe",
+            includeProcessTree: false,
+            name: name);
+
+    /// <param name="name">
+    /// Display name for logs and diagnostics; defaults to <c>exe#pid</c>, which is what a per-process
+    /// stem wants. An exclusion source is named after the track it feeds instead, since naming it
+    /// after the process it is *not* capturing would read backwards everywhere it appears.
+    /// </param>
+    public ProcessLoopbackSource(
+        uint processId, string executableName, bool includeProcessTree = true, string? name = null)
     {
         ProcessId = processId;
         ExecutableName = executableName;
-        Name = $"{executableName}#{processId}";
+        Name = name ?? $"{executableName}#{processId}";
 
         var client = ActivateProcessLoopbackClient(processId, includeProcessTree);
 
@@ -73,7 +100,9 @@ public sealed unsafe partial class ProcessLoopbackSource : IAudioSource
             client, ComInterop.WrapAndRelease<IAudioCaptureClient>(capturePtr), resampler, Name,
             (qpc, samples) => SamplesReady?.Invoke(qpc, samples));
 
-        Log.Info($"Process loopback attached to {Name}.");
+        Log.Info(includeProcessTree
+            ? $"Process loopback attached to {Name}."
+            : $"Process loopback '{Name}' attached to everything except {executableName}#{processId}.");
     }
 
     private static IAudioClient ActivateProcessLoopbackClient(uint processId, bool includeTree)
@@ -82,6 +111,7 @@ public sealed unsafe partial class ProcessLoopbackSource : IAudioSource
         {
             ActivationType = 1,   // AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
             TargetProcessId = processId,
+            // PROCESS_LOOPBACK_MODE: 0 = INCLUDE_TARGET_PROCESS_TREE, 1 = EXCLUDE_TARGET_PROCESS_TREE.
             ProcessLoopbackMode = includeTree ? 0u : 1u,
         };
 

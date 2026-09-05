@@ -1,10 +1,10 @@
-using System.Media;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Microsoft.Win32;
+using ReplayCapture.App.Audio;
 using ReplayCapture.App.Input;
 using ReplayCapture.App.Overlay;
 using ReplayCapture.App.Startup;
@@ -46,6 +46,8 @@ public partial class App : Application
     private TrayController? _tray;
     private GlobalHotkeyService? _hotkeys;
     private IndicatorWindow? _indicator;
+    private NotificationWindow? _notifications;
+    private SaveCue? _saveCue;
     private DispatcherTimer? _statusTimer;
     private DispatcherTimer? _startupRetryTimer;
 
@@ -111,10 +113,10 @@ public partial class App : Application
         _tray.ExitRequested += () => desktop.Shutdown();
         _tray.StartWithWindowsToggled += OnStartWithWindowsToggled;
 
+        CreateOverlays();
         BindHotkey();
         SyncStartupTask();
         WarnIfNotElevated();
-        CreateIndicator();
 
         // The app must never keep the machine awake or the display on, and must come back cleanly
         // once it sleeps: SystemEvents fires this on its own hidden-window thread, so resume is
@@ -166,7 +168,7 @@ public partial class App : Application
             {
                 if (_startupRetryTimer is null)
                 {
-                    _tray?.Notify("Capture could not start", $"{_sessionError} Retrying automatically.", isError: true);
+                    Notify("Capture could not start", $"{_sessionError} Retrying automatically.", isError: true);
                     _startupRetryTimer = new DispatcherTimer { Interval = StartupRetryInterval };
                     _startupRetryTimer.Tick += (_, _) =>
                     {
@@ -185,7 +187,7 @@ public partial class App : Application
 
                 if (_startupRetryTimer is not null)
                 {
-                    _tray?.Notify("Capture started", "The capture session came up after retrying.");
+                    Notify("Capture started", "The capture session came up after retrying.");
                     _startupRetryTimer.Stop();
                     _startupRetryTimer = null;
                 }
@@ -226,7 +228,7 @@ public partial class App : Application
     /// </summary>
     private void OnDisplayTopologyChanged(string reason) => Dispatcher.UIThread.InvokeAsync(() =>
     {
-        _tray?.Notify("Display capture changed", reason);
+        Notify("Display capture changed", reason);
         UpdateStatus();
     });
 
@@ -261,7 +263,7 @@ public partial class App : Application
         }
 
         Log.Warn($"Rebuilding capture: {reason}.");
-        _tray?.Notify("Capture restarted", $"{char.ToUpperInvariant(reason[0])}{reason[1..]}.");
+        Notify("Capture restarted", $"{char.ToUpperInvariant(reason[0])}{reason[1..]}.");
         _indicator?.ShowIdle("restarting…");
         RestartSession();
     }
@@ -292,7 +294,7 @@ public partial class App : Application
         var session = _session;
         if (session is null)
         {
-            _tray?.Notify("Nothing to save", _sessionError ?? "Capture is not running.", isError: true);
+            Notify("Nothing to save", _sessionError ?? "Capture is not running.", isError: true);
             return;
         }
 
@@ -314,7 +316,7 @@ public partial class App : Application
             {
                 var message = task.Exception?.GetBaseException().Message ?? "unknown error";
                 Log.Error("Save failed", task.Exception);
-                _tray?.Notify("Save failed", message, isError: true);
+                Notify("Save failed", message, isError: true);
                 _indicator?.FlashSaved("save failed");
                 return;
             }
@@ -330,7 +332,7 @@ public partial class App : Application
         if (written.Count == 0)
         {
             var reason = results.FirstOrDefault().Error ?? "nothing was buffered yet";
-            _tray?.Notify("Nothing saved", reason, isError: true);
+            Notify("Nothing saved", reason, isError: true);
             _indicator?.FlashSaved("nothing to save");
             return;
         }
@@ -339,19 +341,16 @@ public partial class App : Application
         var megabytes = written.Sum(r => r.Bytes) / (1024 * 1024);
         var folder = Path.GetDirectoryName(written[0].Path) ?? written[0].Path;
 
-        _tray?.Notify(
+        Notify(
             $"Replay saved — {duration:0}s",
             $"{written.Count} file(s), {megabytes} MB{Environment.NewLine}{folder}");
 
         _indicator?.FlashSaved($"saved {duration:0}s");
 
-        if (_config.PlaySoundOnSave)
-        {
-            // The overlay cannot draw over a fullscreen-exclusive game, so the sound is the only
-            // confirmation the user gets in exactly the case they most need one.
-            try { SystemSounds.Asterisk.Play(); }
-            catch (Exception ex) { Log.Warn($"Could not play the save sound: {ex.Message}"); }
-        }
+        // The overlay cannot draw over a fullscreen-exclusive game, so the chime is the only
+        // confirmation the user gets in exactly the case they most need one. It is played by this
+        // process on purpose — see SaveCue — so the desktop stems can exclude it.
+        if (_config.PlaySoundOnSave) _saveCue?.Play();
 
         UpdateStatus();
     }
@@ -393,27 +392,48 @@ public partial class App : Application
             || previous.CaptureBackend != updated.CaptureBackend
             || previous.VideoEncoderBackend != updated.VideoEncoderBackend
             || !previous.Displays.SequenceEqual(updated.Displays)
+            || previous.ExcludeOwnAudioFromLoopback != updated.ExcludeOwnAudioFromLoopback
             || !previous.AudioTracks.SequenceEqual(updated.AudioTracks);
 
         if (pipelineChanged)
         {
             Log.Info("Configuration changed in a way that requires restarting capture.");
-            _tray?.Notify("Settings applied", "Restarting capture; the buffer will fill again shortly.");
+            Notify("Settings applied", "Restarting capture; the buffer will fill again shortly.");
             RestartSession();
         }
         else
         {
             _session?.UpdateConfig(updated);
-            _tray?.Notify("Settings applied", "Changes took effect without interrupting the buffer.");
+            Notify("Settings applied", "Changes took effect without interrupting the buffer.");
         }
     }
 
-    // ---------------------------------------------------------------- indicator
+    // ---------------------------------------------------------- overlay & notifications
 
-    private void CreateIndicator()
+    private void CreateOverlays()
     {
         _indicator = new IndicatorWindow();
+        _notifications = new NotificationWindow();
+        _saveCue = new SaveCue();
         ApplyIndicatorSettings();
+    }
+
+    /// <summary>
+    /// Raises a notification wherever the user has asked for them.
+    /// <para>
+    /// The overlay is the default because a tray balloon is an ordinary desktop window: it is
+    /// composited into the desktop, so every notification the app raises would be recorded into the
+    /// next clip saved within the buffer window. The overlay is excluded from capture. Balloons
+    /// remain available for anyone who would rather have notifications that stick around in the
+    /// Action Center.
+    /// </para>
+    /// </summary>
+    private void Notify(string title, string message, bool isError = false)
+    {
+        if (_config.UseOverlayNotifications && _notifications is not null)
+            _notifications.Post(title, message, isError);
+        else
+            _tray?.Notify(title, message, isError);
     }
 
     private void ApplyIndicatorSettings()
@@ -421,6 +441,7 @@ public partial class App : Application
         if (_indicator is null) return;
 
         _indicator.Apply(_config.OverlayCorner);
+        _notifications?.Apply(_config.OverlayCorner, _config.ShowOverlayIndicator);
 
         if (_config.ShowOverlayIndicator) _indicator.Show();
         else _indicator.Hide();
@@ -446,7 +467,7 @@ public partial class App : Application
         {
             // A dead hotkey is the single most confusing failure this app can have, so it is
             // surfaced loudly rather than left in the log.
-            _tray!.Notify("Hotkey unavailable", $"{bindError} Change it in Settings.", isError: true);
+            Notify("Hotkey unavailable", $"{bindError} Change it in Settings.", isError: true);
         }
     }
 
@@ -462,7 +483,7 @@ public partial class App : Application
             if (StartupTaskInstaller.Install(out _))
             {
                 Log.Info($"Startup task re-pointed from '{previous}' to '{Environment.ProcessPath}'.");
-                _tray?.Notify("Startup entry updated",
+                Notify("Startup entry updated",
                     "The logon task was pointing at an older build and now launches this one.");
             }
 
@@ -479,7 +500,7 @@ public partial class App : Application
         if (_config.StartWithWindows)
         {
             if (StartupTaskInstaller.Install(out var error)) _tray!.SetStartupChecked(true);
-            else _tray!.Notify("Could not enable startup", error ?? "Unknown error", isError: true);
+            else Notify("Could not enable startup", error ?? "Unknown error", isError: true);
         }
         else
         {
@@ -493,7 +514,7 @@ public partial class App : Application
         if (ElevationInfo.IsElevated) return;
 
         Log.Warn("Running unelevated — the hotkey will not fire while an elevated window has focus.");
-        _tray!.Notify(
+        Notify(
             "Running without administrator rights",
             $"{_config.Hotkey} will be ignored while an elevated app (Task Manager, an anti-cheat " +
             "game, an admin console) has focus. Restart ReplayCapture as administrator.",
@@ -513,8 +534,8 @@ public partial class App : Application
         }
         else
         {
-            _tray!.Notify("Startup change failed", error ?? "Unknown error", isError: true);
-            _tray.SetStartupChecked(!enabled);
+            Notify("Startup change failed", error ?? "Unknown error", isError: true);
+            _tray?.SetStartupChecked(!enabled);
         }
     }
 
@@ -528,6 +549,8 @@ public partial class App : Application
         _hotkeys?.Dispose();
         _session?.Dispose();
         _indicator?.Close();
+        _notifications?.Close();
+        _saveCue?.Dispose();
         _tray?.Dispose();
         _singleInstance?.Dispose();
     }

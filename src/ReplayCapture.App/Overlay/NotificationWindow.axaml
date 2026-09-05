@@ -1,0 +1,42 @@
+<Window x:Class="ReplayCapture.App.Overlay.NotificationWindow"
+        xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ReplayCapture notification"
+        SystemDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        CanResize="False"
+        SizeToContent="WidthAndHeight"
+        ShowActivated="False"
+        IsHitTestVisible="False">
+
+    <Border x:Name="Root"
+            Width="330"
+            CornerRadius="8"
+            Padding="13,10"
+            Background="#E6101215"
+            BorderBrush="#40FFFFFF"
+            BorderThickness="1">
+        <Grid ColumnDefinitions="3,11,*">
+            <Border x:Name="Accent" Grid.Column="0" CornerRadius="2" Background="#46A758" />
+            <StackPanel Grid.Column="2">
+                <TextBlock x:Name="TitleText"
+                           Text="ReplayCapture"
+                           Foreground="#F2F4F6"
+                           FontFamily="Segoe UI"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           TextWrapping="Wrap" />
+                <TextBlock x:Name="MessageText"
+                           Text=""
+                           Margin="0,3,0,0"
+                           Foreground="#B6BCC4"
+                           FontFamily="Segoe UI"
+                           FontSize="12"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

@@ -18,6 +18,31 @@ public sealed record AppConfig
     public bool PlaySoundOnSave { get; init; } = true;
     public bool ShowOverlayIndicator { get; init; } = true;
 
+    /// <summary>
+    /// Show the app's notifications as an on-screen overlay (excluded from capture) instead of as
+    /// tray balloons. A balloon is an ordinary desktop window, so "Replay saved" ends up recorded
+    /// into the next clip; the overlay never is. Turn it off to go back to shell notifications,
+    /// which survive in the Action Center after they fade.
+    /// </summary>
+    public bool UseOverlayNotifications { get; init; } = true;
+
+    /// <summary>
+    /// Capture the default playback device by taking every process's audio <i>except</i> this app's
+    /// own, instead of tapping the endpoint's final mix.
+    /// <para>
+    /// This is what keeps the save chime out of the desktop stems: an endpoint loopback captures the
+    /// mix after this app's own sounds are already in it, and WASAPI offers no way to opt a stream
+    /// out. Two things change with it on, both usually invisible: audio being played to a
+    /// <i>different</i> output device also lands on these tracks (process loopback follows
+    /// processes, not endpoints), and Windows' own system sounds — rendered by the audio service
+    /// rather than by an app — may not be captured at all. It only affects
+    /// <c>device:render:default</c>; a pinned <c>device:render:{id}</c> always uses endpoint
+    /// loopback, since process loopback cannot be aimed at a specific endpoint. If activation fails,
+    /// the source falls back to endpoint loopback and logs it.
+    /// </para>
+    /// </summary>
+    public bool ExcludeOwnAudioFromLoopback { get; init; } = true;
+
     /// <summary>Which corner of the primary display the armed indicator sits in.</summary>
     public OverlayCorner OverlayCorner { get; init; } = OverlayCorner.TopRight;
 

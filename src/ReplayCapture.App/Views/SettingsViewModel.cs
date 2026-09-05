@@ -132,6 +132,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _startWithWindows;
     [ObservableProperty] private bool _playSoundOnSave;
     [ObservableProperty] private bool _showOverlayIndicator;
+    [ObservableProperty] private bool _useOverlayNotifications;
+    [ObservableProperty] private bool _excludeOwnAudioFromLoopback;
     [ObservableProperty] private OverlayCorner _overlayCorner;
     [ObservableProperty] private int _maxRingMemoryMegabytes;
     [ObservableProperty] private int _blankDisplayTimeoutSeconds;
@@ -177,6 +179,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         _startWithWindows = config.StartWithWindows;
         _playSoundOnSave = config.PlaySoundOnSave;
         _showOverlayIndicator = config.ShowOverlayIndicator;
+        _useOverlayNotifications = config.UseOverlayNotifications;
+        _excludeOwnAudioFromLoopback = config.ExcludeOwnAudioFromLoopback;
         _overlayCorner = config.OverlayCorner;
         _maxRingMemoryMegabytes = config.MaxRingMemoryMegabytes;
         _blankDisplayTimeoutSeconds = config.BlankDisplayTimeoutSeconds;
@@ -440,6 +444,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             StartWithWindows = StartWithWindows,
             PlaySoundOnSave = PlaySoundOnSave,
             ShowOverlayIndicator = ShowOverlayIndicator,
+            UseOverlayNotifications = UseOverlayNotifications,
+            ExcludeOwnAudioFromLoopback = ExcludeOwnAudioFromLoopback,
             OverlayCorner = OverlayCorner,
             MaxRingMemoryMegabytes = Math.Clamp(MaxRingMemoryMegabytes, 256, 32768),
             BlankDisplayTimeoutSeconds = BlankDisplayTimeoutSeconds,

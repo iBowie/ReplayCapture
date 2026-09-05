@@ -82,7 +82,12 @@ internal but is exactly the logic worth testing).
   X" directly, and enumerating all running processes doesn't scale) and `ProcessTrackBinding`
   resolves which track each session belongs to, expanding `group:` the same way
   `AudioSourceSpec.TryResolveGroup` does so live matching and `rcprobe sessions`' static config check
-  never disagree.
+  never disagree. `device:render:default` is opened by `ProcessLoopbackSource.CreateExcludingSelf`
+  (process loopback in EXCLUDE-target-tree mode against our own pid) rather than as an endpoint
+  loopback whenever `AppConfig.ExcludeOwnAudioFromLoopback` is set — an endpoint loopback taps the
+  final mix and WASAPI has no per-stream opt-out, so this is the only thing that keeps the app's own
+  save chime out of the desktop stems. See the README's "Staying out of its own recordings" for the
+  trade-offs.
 - `Muxing/MovWriter` writes QuickTime `.mov` (chosen over MP4/MKV — see README) with one video
   stream and N audio streams; track names surface as QuickTime `handler_name` boxes.
 - `Timing/Clock` + `FramePacer` are the shared timebase: everything is timestamped in QPC ticks
@@ -100,7 +105,12 @@ internal but is exactly the logic worth testing).
 wires `TrayController` (menu, notifications, armed/saving state), `GlobalHotkeyService` (elevated
 `RegisterHotKey`, since UIPI drops hotkeys and low-level keyboard hooks while a higher-integrity
 window has focus — this is why the app requires admin, see README), `IndicatorWindow` (the
-armed-state overlay, excluded from its own capture), and `StartupTaskInstaller` (a Task Scheduler
+armed-state overlay, excluded from its own capture), `NotificationWindow` (every notification the app
+raises, likewise `WDA_EXCLUDEFROMCAPTURE` — a tray balloon is an ordinary desktop window and would be
+recorded into the next clip; `App.Notify` routes there unless `UseOverlayNotifications` is off),
+`SaveCue` (the save chime, synthesised and played through `SoundPlayer` so it belongs to *this*
+process and the audio exclusion above can remove it — `SystemSounds`/`MessageBeep` is rendered by
+Windows' own session and cannot be), and `StartupTaskInstaller` (a Task Scheduler
 logon entry at `RunLevel=HighestAvailable`, not a Run key, because only Task Scheduler can launch
 elevated without a UAC prompt). `SelfTest.Run()` (`--selftest`) opens every window and the tray
 context menu and exits non-zero on failure. Config changes only restart the pipeline

@@ -25,9 +25,10 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <!-- Microsoft.Win32.SystemEvents (resume-from-sleep detection) and System.Media.SystemSounds
-         (save confirmation sound): both pulled in transitively by UseWPF in the WPF shell, need an
-         explicit reference here since Avalonia doesn't bring them. -->
+    <!-- Microsoft.Win32.SystemEvents (resume-from-sleep detection) and System.Media.SoundPlayer
+         (the save confirmation chime — see Audio/SaveCue.cs for why it is SoundPlayer and not
+         SystemSounds): both pulled in transitively by UseWPF in the WPF shell, need an explicit
+         reference here since Avalonia doesn't bring them. -->
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.11" />
     <PackageReference Include="System.Windows.Extensions" Version="10.0.11" />
     <!-- Pinned to the 11.3.x line, not the newer 12.x major: Avalonia.Diagnostics has no 12.x

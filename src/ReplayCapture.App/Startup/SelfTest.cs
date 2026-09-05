@@ -50,6 +50,15 @@ internal static class SelfTest
             indicator.ShowIdle("idle");
         });
 
+        NotificationWindow? notifications = null;
+        Check(failures, "notification overlay", () =>
+        {
+            notifications = new NotificationWindow();
+            notifications.Apply(OverlayCorner.TopRight, indicatorVisible: true);
+            notifications.Post("Replay saved — 60s", "2 file(s), 512 MB");
+            notifications.Post("Save failed", "selftest", isError: true);
+        });
+
         Check(failures, "settings window", () =>
         {
             var settings = new SettingsWindow(config);
@@ -75,6 +84,7 @@ internal static class SelfTest
         });
 
         indicator?.Close();
+        notifications?.Close();
         tray?.Dispose();
 
         foreach (var failure in failures) Console.Error.WriteLine($"  FAIL  {failure}");

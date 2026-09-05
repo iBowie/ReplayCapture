@@ -40,6 +40,7 @@ public sealed class AudioEngine : IDisposable
     private readonly Timer _processPoll;
     private readonly DefaultDeviceWatcher _deviceWatcher;
     private readonly int _windowSeconds;
+    private readonly bool _excludeOwnAudio;
     private bool _disposed;
 
     /// <summary>Shared timeline origin. Every track and every video stream is measured from here.</summary>
@@ -53,6 +54,7 @@ public sealed class AudioEngine : IDisposable
     {
         EpochQpc = epochQpc;
         _windowSeconds = config.BufferSeconds;
+        _excludeOwnAudio = config.ExcludeOwnAudioFromLoopback;
 
         BuildTracks(config);
 
@@ -119,6 +121,14 @@ public sealed class AudioEngine : IDisposable
             if (_disposed) return;
             if (!_sourcesByKey.TryGetValue(key, out var oldSource)) return;
 
+            // A process loopback captures processes wherever they render, so it is already
+            // listening to whatever the new default is — reopening it would only drop samples.
+            if (oldSource is ProcessLoopbackSource)
+            {
+                Log.Info($"Default playback device changed; '{key}' is a process loopback and follows it automatically.");
+                return;
+            }
+
             var spec = _sourceSpecsByKey[key];
             var targets = _sourceTargetsByKey[key];
 
@@ -159,14 +169,14 @@ public sealed class AudioEngine : IDisposable
         }
     }
 
-    private static IAudioSource? TryOpenSource(AudioSourceSpec spec, string trackName)
+    private IAudioSource? TryOpenSource(AudioSourceSpec spec, string trackName)
     {
         try
         {
             return spec switch
             {
                 { Kind: AudioSourceKind.RenderLoopback, EndpointId: null } =>
-                    AudioDeviceEnumerator.CreateDefaultRenderLoopback(),
+                    OpenDefaultRenderLoopback(),
                 { Kind: AudioSourceKind.Capture, EndpointId: null } =>
                     AudioDeviceEnumerator.CreateDefaultCapture(),
                 { Kind: AudioSourceKind.RenderLoopback } =>
@@ -182,6 +192,32 @@ public sealed class AudioEngine : IDisposable
             Log.Warn($"Track '{trackName}': could not open '{spec.Raw}' ({ex.Message}). Track continues silent.");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Opens "everything the system plays". With
+    /// <see cref="AppConfig.ExcludeOwnAudioFromLoopback"/> set this is a process loopback that
+    /// excludes this app's own process tree — the only way to keep the save chime out of the
+    /// desktop stems, since an endpoint loopback taps the mix that already contains it.
+    /// </summary>
+    private IAudioSource OpenDefaultRenderLoopback()
+    {
+        if (_excludeOwnAudio)
+        {
+            try
+            {
+                return ProcessLoopbackSource.CreateExcludingSelf("Desktop");
+            }
+            catch (Exception ex)
+            {
+                // Worth a warning rather than a silent downgrade: the fallback works, but the app's
+                // own sounds are audible in saved clips again, which is the whole point of the flag.
+                Log.Warn($"Could not open the desktop loopback with this app excluded ({ex.Message}); " +
+                         "falling back to endpoint loopback, in which the save chime is audible.");
+            }
+        }
+
+        return AudioDeviceEnumerator.CreateDefaultRenderLoopback();
     }
 
     public void Start()

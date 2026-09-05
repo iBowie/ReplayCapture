@@ -130,6 +130,11 @@ muxer writes a seventh track.
 
 Executable patterns accept `*` and `?` and match case-insensitively.
 
+`device:render:default` is captured *per-process, with ReplayCapture excluded*, not as an endpoint
+loopback — see "Staying out of its own recordings" below for why, and what that changes. A pinned
+`device:render:{endpointId}` is always an endpoint loopback: the process-loopback device cannot be
+aimed at a specific endpoint.
+
 `group:` is shorthand for listing several `proc:` rules — instead of `proc:discord.exe`,
 `proc:ms-teams.exe`, `proc:slack.exe` on one track and `proc:!discord.exe`, `proc:!ms-teams.exe`,
 `proc:!slack.exe` on the `proc:*` catch-all, both sides can say `group:comms` / `group:!comms`.
@@ -142,6 +147,38 @@ stems at once. `AppConfigTests.Game_track_captures_everything_not_claimed_elsewh
 for the shipped defaults, and `rcprobe sessions`' config check expands `group:` the same way the
 live rules engine does, so it catches a missing exclusion whether it's spelled as `proc:!x` or
 `group:!x`.
+
+### Staying out of its own recordings
+
+A replay tool that appears in its own replays is a bug, and both halves of "you saved a clip" —
+the notification and the chime — get there by a different route.
+
+**On screen.** A tray balloon (and a Windows toast) is an ordinary desktop window: the compositor
+draws it, so Desktop Duplication captures it, and "Replay saved — 60s" turns up in the corner of the
+*next* clip saved inside the buffer window. So notifications are drawn by the app itself instead, in
+an overlay window marked `WDA_EXCLUDEFROMCAPTURE` exactly like the armed indicator — visible to the
+user, invisible to the recorder, click-through and never focusable so it cannot steal input from a
+game. `UseOverlayNotifications` turns this off and goes back to balloons, which have the one thing
+the overlay does not: they survive in the Action Center after they fade.
+
+**In audio.** This one is not solvable on the playback side — WASAPI has no "do not include this
+stream in loopback" flag — so it is solved on the capture side, and it needed two changes:
+
+- The chime is no longer `SystemSounds.Asterisk`. That is `MessageBeep`, which Windows renders
+  through its own shared *System Sounds* session, not through this process, so no per-process rule
+  could ever have excluded it. It is now a short synthesised two-tone cue played through
+  `SoundPlayer` → `PlaySound`, which opens a render stream inside this process.
+- `device:render:default` is captured with the process-loopback device in
+  `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` mode, targeting this app's own pid — "every
+  process except us" — instead of tapping the endpoint's final mix, which already had the chime in
+  it. (`proc:` and `group:` stems never had this problem: `ProcessTrackBinding` has always skipped
+  our own pid.)
+
+Two things change with that on, both usually invisible: audio played to a *different* output device
+also lands on those tracks, because process loopback follows processes rather than endpoints; and
+Windows' own system sounds, rendered by the audio service rather than by an app, may not be captured
+at all. `ExcludeOwnAudioFromLoopback` (default on) turns it off and restores endpoint loopback; so
+does an activation failure, which falls back and logs rather than failing the track.
 
 ## Status
 
@@ -157,7 +194,8 @@ live rules engine does, so it catches a missing exclusion whether it's spelled a
 | **M7** — robustness and overhead | **done**; measured below |
 
 Alt+F10 (or the tray menu) writes the buffered window to disk. Settings live in the tray menu; the
-armed indicator sits in a configurable corner and is excluded from capture.
+armed indicator and the notification overlay both sit in a configurable corner and are excluded from
+capture — see "Staying out of its own recordings" below.
 
 ### UI self-test
 

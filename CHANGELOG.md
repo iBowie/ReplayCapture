@@ -2,6 +2,32 @@
 
 All notable changes to ReplayCapture, tracked from `v0.1.0-alpha` onward.
 
+## [Unreleased]
+
+### Changed
+- **Notifications are an on-screen overlay instead of tray balloons.** A shell balloon is an
+  ordinary desktop window, so "Replay saved — 60s" was composited into the desktop and recorded into
+  the *next* clip saved within the buffer window. The new `NotificationWindow` carries
+  `WDA_EXCLUDEFROMCAPTURE` like the armed indicator does, is click-through and never activates, and
+  sits just under (or above) the indicator in the same corner. Every notification the app raises now
+  goes through it. Settings → "Show notifications as an on-screen overlay instead of tray balloons"
+  (`UseOverlayNotifications`, default on) switches back to balloons, which persist in the Action
+  Center after they fade.
+- **The save chime is no longer audible in later replays.** Two things were wrong. The chime was
+  `SystemSounds.Asterisk`, i.e. `MessageBeep`, which Windows renders through its own shared "System
+  Sounds" session rather than through this process — nothing this app owns could have excluded it.
+  It is now a short synthesised two-tone cue played with `SoundPlayer`, which opens a render stream
+  inside this process. And `device:render:default` is now captured as a process loopback that
+  excludes this app's own process tree (`AppConfig.ExcludeOwnAudioFromLoopback`, default on) rather
+  than as an endpoint loopback of the final mix, which by definition already contained anything the
+  app had played and offered no way to opt out. Per-process stems already skipped our own pid, so
+  only the desktop stems were affected. Trade-offs, both usually invisible: audio played to a
+  *different* output device now also lands on those tracks (process loopback follows processes, not
+  endpoints), and Windows' own system sounds may not be captured at all. Turning the option off
+  restores endpoint loopback; so does an activation failure, which is logged rather than silent.
+  Pinned `device:render:{id}` sources are unaffected — process loopback cannot be aimed at a
+  specific endpoint.
+
 ## [v0.2.0-alpha] — 2026-08-22
 
 ### Added
