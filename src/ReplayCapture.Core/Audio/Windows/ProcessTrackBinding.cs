@@ -18,14 +18,28 @@ internal sealed class ProcessTrackBinding : IDisposable
     private readonly AudioTrackBuffer _track;
     private readonly List<AudioSourceSpec> _includes;
     private readonly List<AudioSourceSpec> _excludes;
-    private readonly Dictionary<uint, ProcessLoopbackSource> _attached = [];
+    private readonly Dictionary<uint, IAudioSource> _attached = [];
     private readonly HashSet<uint> _failed = [];
+
+    // Guards _attached/_failed against the periodic poll timer firing again before a slow
+    // ActivateAudioInterfaceAsync call (up to 5s) from the previous tick has returned — without it,
+    // two overlapping Refresh calls can both see a process as unattached and each attach their own
+    // ProcessLoopbackSource to it, doubling that process's audio on the track.
+    private readonly Lock _gate = new();
 
     private bool _disposed;
 
+    /// <summary>
+    /// Creates the source a matched process is captured through. Real code always uses the default
+    /// (a live <see cref="ProcessLoopbackSource"/>); tests override it to exercise <see cref="Refresh"/>
+    /// without touching real WASAPI.
+    /// </summary>
+    internal Func<uint, string, IAudioSource> CreateSource { get; set; } =
+        (processId, executableName) => new ProcessLoopbackSource(processId, executableName);
+
     public string TrackName => _track.Name;
-    public int AttachedCount => _attached.Count;
-    public IEnumerable<string> AttachedNames => _attached.Values.Select(s => s.Name);
+    public int AttachedCount { get { lock (_gate) return _attached.Count; } }
+    public IEnumerable<string> AttachedNames { get { lock (_gate) return _attached.Values.Select(s => s.Name).ToList(); } }
 
     public ProcessTrackBinding(
         AudioTrackBuffer track,
@@ -83,37 +97,45 @@ internal sealed class ProcessTrackBinding : IDisposable
     {
         if (_disposed || !HasRules) return;
 
-        var wanted = sessions.Where(Matches).ToDictionary(s => s.ProcessId);
-
-        foreach (var processId in _attached.Keys.Where(pid => !wanted.ContainsKey(pid)).ToList())
+        // The whole pass is serialized: an overlapping call (the poll timer firing again while a
+        // slow activation from the previous tick is still in flight) must wait until _attached
+        // reflects that activation's result, or it will attach a second source to the same process.
+        lock (_gate)
         {
-            var source = _attached[processId];
-            _attached.Remove(processId);
-            source.Dispose();
-            Log.Info($"Track '{TrackName}': detached from {source.Name} ({source.FramesCaptured} frames).");
-        }
+            if (_disposed) return;
 
-        // A process that failed once should not be retried on every poll.
-        _failed.IntersectWith(wanted.Keys);
+            var wanted = sessions.Where(Matches).ToDictionary(s => s.ProcessId);
 
-        foreach (var (processId, session) in wanted)
-        {
-            if (_attached.ContainsKey(processId) || _failed.Contains(processId)) continue;
-
-            try
+            foreach (var processId in _attached.Keys.Where(pid => !wanted.ContainsKey(pid)).ToList())
             {
-                var source = new ProcessLoopbackSource(processId, session.ExecutableName);
-                source.SamplesReady += OnSamples;
-                source.Start();
-                _attached[processId] = source;
-                Log.Info($"Track '{TrackName}': attached to {session}.");
+                var source = _attached[processId];
+                _attached.Remove(processId);
+                source.Dispose();
+                Log.Info($"Track '{TrackName}': detached from {source.Name} ({source.FramesCaptured} frames).");
             }
-            catch (Exception ex)
+
+            // A process that failed once should not be retried on every poll.
+            _failed.IntersectWith(wanted.Keys);
+
+            foreach (var (processId, session) in wanted)
             {
-                // Protected processes and some system services refuse loopback; that must not stop
-                // the rest of the track from working.
-                _failed.Add(processId);
-                Log.Warn($"Track '{TrackName}': could not attach to {session} ({ex.Message}).");
+                if (_attached.ContainsKey(processId) || _failed.Contains(processId)) continue;
+
+                try
+                {
+                    var source = CreateSource(processId, session.ExecutableName);
+                    source.SamplesReady += OnSamples;
+                    source.Start();
+                    _attached[processId] = source;
+                    Log.Info($"Track '{TrackName}': attached to {session}.");
+                }
+                catch (Exception ex)
+                {
+                    // Protected processes and some system services refuse loopback; that must not stop
+                    // the rest of the track from working.
+                    _failed.Add(processId);
+                    Log.Warn($"Track '{TrackName}': could not attach to {session} ({ex.Message}).");
+                }
             }
         }
     }
@@ -123,10 +145,13 @@ internal sealed class ProcessTrackBinding : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
 
-        foreach (var source in _attached.Values) source.Dispose();
-        _attached.Clear();
+            foreach (var source in _attached.Values) source.Dispose();
+            _attached.Clear();
+        }
     }
 }

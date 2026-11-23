@@ -45,4 +45,74 @@ public class WasapiCaptureLoopTests
 
         Assert.Equal(150_000, frameStart);
     }
+
+    [Fact]
+    public void Ordinary_per_packet_jitter_is_not_seen_as_drift()
+    {
+        // The same handful-of-frames jitter that ResolveFrameStart is built to ignore must not trip
+        // the drift check either, or the two would fight over every single packet.
+        var drifted = WasapiCaptureLoop.HasDrifted(
+            nextFrame: 96_000, reportedFrameStart: 95_997, WasapiCaptureLoop.MaxDriftFrames);
+
+        Assert.False(drifted);
+    }
+
+    [Fact]
+    public void A_gap_right_at_the_drift_budget_is_not_yet_a_drift()
+    {
+        var drifted = WasapiCaptureLoop.HasDrifted(
+            nextFrame: 96_000, reportedFrameStart: 96_000 + WasapiCaptureLoop.MaxDriftFrames,
+            WasapiCaptureLoop.MaxDriftFrames);
+
+        Assert.False(drifted);
+    }
+
+    [Fact]
+    public void Chronic_clock_mismatch_past_the_budget_is_reported_as_drift()
+    {
+        // No discontinuity ever fired for this gap (WASAPI only flags real over/underruns), but the
+        // running count has quietly fallen this far behind the device's own reported position —
+        // exactly what a slow clock-rate mismatch between the audio hardware and the nominal 48 kHz
+        // this loop assumes looks like.
+        var drifted = WasapiCaptureLoop.HasDrifted(
+            nextFrame: 96_000, reportedFrameStart: 96_000 + WasapiCaptureLoop.MaxDriftFrames + 1,
+            WasapiCaptureLoop.MaxDriftFrames);
+
+        Assert.True(drifted);
+    }
+
+    [Fact]
+    public void Drift_is_detected_in_either_direction()
+    {
+        var drifted = WasapiCaptureLoop.HasDrifted(
+            nextFrame: 96_000, reportedFrameStart: 96_000 - WasapiCaptureLoop.MaxDriftFrames - 1,
+            WasapiCaptureLoop.MaxDriftFrames);
+
+        Assert.True(drifted);
+    }
+
+    [Fact]
+    public void The_very_first_packet_is_never_reported_as_drifted()
+    {
+        // There is nothing yet to have drifted from; ResolveFrameStart already handles this packet
+        // by trusting the reported position outright.
+        var drifted = WasapiCaptureLoop.HasDrifted(
+            nextFrame: long.MinValue, reportedFrameStart: 500_000, WasapiCaptureLoop.MaxDriftFrames);
+
+        Assert.False(drifted);
+    }
+
+    [Fact]
+    public void A_detected_drift_resyncs_the_frame_start_to_the_devices_reported_position()
+    {
+        // Mirrors how Drain() combines the two: once HasDrifted trips, ResolveFrameStart is called
+        // exactly as it is for a flagged discontinuity.
+        const long nextFrame = 96_000;
+        const long reportedFrameStart = 96_000 + WasapiCaptureLoop.MaxDriftFrames + 1;
+
+        var drifted = WasapiCaptureLoop.HasDrifted(nextFrame, reportedFrameStart, WasapiCaptureLoop.MaxDriftFrames);
+        var frameStart = WasapiCaptureLoop.ResolveFrameStart(nextFrame, reportedFrameStart, discontinuous: drifted);
+
+        Assert.Equal(reportedFrameStart, frameStart);
+    }
 }

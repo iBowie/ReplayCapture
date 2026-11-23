@@ -47,6 +47,7 @@ public sealed unsafe class WasapiCaptureSource : IAudioSource
 
     public long FramesCaptured => _loop.FramesCaptured;
     public long Discontinuities => _loop.Discontinuities;
+    public long DriftResyncs => _loop.DriftResyncs;
 
     public event Action<long, ReadOnlyMemory<float>>? SamplesReady;
 

@@ -172,4 +172,60 @@ public class ProcessTrackBindingTests
         Assert.Contains("spotify.exe", music);
         Assert.Contains("foobar2000.exe", music);
     }
+
+    /// <summary>
+    /// An <see cref="IAudioSource"/> whose <see cref="Start"/> blocks until told to proceed, standing
+    /// in for a slow <c>ActivateAudioInterfaceAsync</c> call without touching real WASAPI.
+    /// </summary>
+    private sealed class BlockingFakeSource(string name, ManualResetEventSlim release) : IAudioSource
+    {
+        public string Name { get; } = name;
+        public long FramesCaptured => 0;
+        public event Action<long, ReadOnlyMemory<float>>? SamplesReady { add { } remove { } }
+
+        // Stands in for the up-to-5s ActivateAudioInterfaceAsync wait a real ProcessLoopbackSource
+        // blocks on, so a second Refresh has a wide window to (incorrectly) attach concurrently.
+        public void Start() => release.Wait();
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task Concurrent_refresh_does_not_double_attach_the_same_process()
+    {
+        // Reproduces the poll-timer reentrancy race: a second Refresh (the next timer tick) firing
+        // while a slow attach from the previous tick is still in progress must not attach its own
+        // second source to the same process, or that process's audio lands on the track twice.
+        var binding = Binding("Game", "proc:*");
+
+        var releaseAttach = new ManualResetEventSlim(false);
+        var createCount = 0;
+        var firstCreated = new ManualResetEventSlim(false);
+        var secondCreated = new ManualResetEventSlim(false);
+
+        binding.CreateSource = (pid, exe) =>
+        {
+            var call = Interlocked.Increment(ref createCount);
+            (call == 1 ? firstCreated : secondCreated).Set();
+            return new BlockingFakeSource($"{exe}#{pid}", releaseAttach);
+        };
+
+        var sessions = new[] { Session("game.exe", pid: 42) };
+
+        var firstTick = Task.Run(() => binding.Refresh(sessions));
+
+        // Wait until the first Refresh call has created its source and is blocked mid-activation.
+        Assert.True(firstCreated.Wait(TimeSpan.FromSeconds(5)));
+
+        // The overlapping poll tick: fires before the first attach has returned. Without the fix,
+        // nothing blocks it from reaching CreateSource immediately; give it a moment to do so.
+        var secondTick = Task.Run(() => binding.Refresh(sessions));
+        secondCreated.Wait(TimeSpan.FromMilliseconds(300));
+
+        releaseAttach.Set();
+        await Task.WhenAll(firstTick, secondTick).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, createCount);
+        Assert.Equal(1, binding.AttachedCount);
+    }
 }

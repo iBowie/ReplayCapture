@@ -25,13 +25,40 @@ internal sealed class WasapiCaptureLoop : IDisposable
     private readonly float[] _scratch;
     private readonly string _name;
 
+    /// <summary>
+    /// How far the running frame count may drift from the device's own reported position before
+    /// being corrected — the audio equivalent of <see cref="Timing.FramePacer.MaxDriftTicks"/>.
+    /// <para>
+    /// Comfortably above the few-frames jitter an ordinary continuous packet's timestamp shows (see
+    /// <see cref="ResolveFrameStart"/> — that noise is what this loop is built to ignore), but far
+    /// below anything audible. WASAPI's discontinuity flag fires for a buffer over/underrun, never
+    /// for the audio hardware's sample clock simply running at a slightly different rate than the
+    /// nominal <see cref="AudioFormat.SampleRate"/> this loop assumes for every continuous packet —
+    /// two independent oscillators essentially never agree to the part-per-million. Without this,
+    /// that mismatch accumulates for as long as the endpoint stays glitch-free, which on a
+    /// generously-buffered source can be the whole session, and the saved clip's audio drifts
+    /// further from the shared QPC timeline the longer the app has been armed.
+    /// </para>
+    /// </summary>
+    internal const long MaxDriftFrames = AudioFormat.SampleRate * 40 / 1000; // 40 ms
+
     private long _framesCaptured;
     private long _discontinuities;
+    private long _driftResyncs;
     private long _nextFrame = long.MinValue;
     private bool _disposed;
 
     public long FramesCaptured => Interlocked.Read(ref _framesCaptured);
     public long Discontinuities => Interlocked.Read(ref _discontinuities);
+
+    /// <summary>
+    /// Times this loop has re-anchored to the device's reported position outside of a flagged
+    /// discontinuity, because the running frame count had drifted more than
+    /// <see cref="MaxDriftFrames"/> from it. Zero on a device whose clock genuinely matches the
+    /// nominal rate; a climbing count over a long session means it does not, and this is what keeps
+    /// that mismatch from growing without bound.
+    /// </summary>
+    public long DriftResyncs => Interlocked.Read(ref _driftResyncs);
 
     /// <summary>
     /// Picks the frame position a packet should be written at: right after the previous packet
@@ -54,6 +81,16 @@ internal sealed class WasapiCaptureLoop : IDisposable
     /// </summary>
     internal static long ResolveFrameStart(long nextFrame, long reportedFrameStart, bool discontinuous) =>
         discontinuous || nextFrame == long.MinValue ? reportedFrameStart : nextFrame;
+
+    /// <summary>
+    /// True when the running frame count has drifted more than <paramref name="maxDriftFrames"/>
+    /// from the device's own reported position on an otherwise-continuous packet. Pure and
+    /// side-effect-free so the threshold can be verified without a real device; see
+    /// <see cref="MaxDriftFrames"/> for why this check exists alongside
+    /// <see cref="ResolveFrameStart"/> rather than folded into it.
+    /// </summary>
+    internal static bool HasDrifted(long nextFrame, long reportedFrameStart, long maxDriftFrames) =>
+        nextFrame != long.MinValue && Math.Abs(reportedFrameStart - nextFrame) > maxDriftFrames;
 
     public WasapiCaptureLoop(
         IAudioClient client,
@@ -151,7 +188,23 @@ internal sealed class WasapiCaptureLoop : IDisposable
                 }
 
                 var reportedFrameStart = AudioFormat.TicksToFrames(qpcTicks);
-                var frameStart = ResolveFrameStart(_nextFrame, reportedFrameStart, discontinuous);
+
+                // A flagged discontinuity already forces a resync to the reported position; only
+                // check for chronic drift outside of that, or every genuine gap would also count as
+                // one of these.
+                var driftResync = !discontinuous && HasDrifted(_nextFrame, reportedFrameStart, MaxDriftFrames);
+                if (driftResync)
+                {
+                    var resyncs = Interlocked.Increment(ref _driftResyncs);
+                    if (resyncs == 1 || resyncs % 20 == 0)
+                    {
+                        var driftMs = (reportedFrameStart - _nextFrame) * 1000.0 / AudioFormat.SampleRate;
+                        Log.Warn($"Audio source '{_name}' drifted {driftMs:0.0} ms from its own device " +
+                                 $"clock; resynced ({resyncs} total).");
+                    }
+                }
+
+                var frameStart = ResolveFrameStart(_nextFrame, reportedFrameStart, discontinuous || driftResync);
 
                 if (produced > 0)
                 {
@@ -180,5 +233,7 @@ internal sealed class WasapiCaptureLoop : IDisposable
 
         if (_discontinuities > 0)
             Log.Warn($"Audio source '{_name}' saw {_discontinuities} discontinuities.");
+        if (_driftResyncs > 0)
+            Log.Warn($"Audio source '{_name}' needed {_driftResyncs} clock-drift resync(s).");
     }
 }

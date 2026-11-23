@@ -7,6 +7,7 @@ namespace ReplayCapture.Core.Audio;
 public interface IAudioSource : IDisposable
 {
     string Name { get; }
+    long FramesCaptured { get; }
     event Action<long, ReadOnlyMemory<float>>? SamplesReady;
     void Start();
 }
